@@ -1,0 +1,157 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.conda/
+conda-meta/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# PyCharm
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# VS Code
+.vscode/
+.history/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# Data directories (contains large datasets)
+data/raw/
+data/intermediate/
+data/final/
+
+# Keep directory structure but ignore contents
+!data/raw/.gitkeep
+!data/intermediate/.gitkeep
+!data/final/.gitkeep
+
+# Model outputs and checkpoints
+outputs/
+checkpoints/
+runs/
+models/
+*.pth
+*.bin
+*.ckpt
+*.safetensors
+
+# HuggingFace cache
+.cache/
+huggingface/
+transformers_cache/
+
+# Logs
+*.log
+logs/
+tensorboard/
+wandb/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+.DS_Store
+
+# Project-specific
+# Uncomment if you want to ignore config changes (not recommended for this project)
+# config/*.yaml
+
+# Training artifacts
+*.pt
+*.onnx
+*.pb
+
+# Dataset index files (can be regenerated)
+data/raw/raw_index.json
+
+# Evaluation results (can be regenerated)
+# Uncomment if you don't want to track evaluation results
+# outputs/evaluation/
+
+# Keep important empty directories
+!data/.gitkeep
+!outputs/.gitkeep
+!scripts/.gitkeep

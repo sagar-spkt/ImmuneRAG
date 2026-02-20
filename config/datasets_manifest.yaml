@@ -1,0 +1,171 @@
+# Dataset Manifest for Instruction Hierarchy Training
+# This file defines all seed datasets, their licenses, fields to extract, and sampling policies
+
+datasets:
+  # High-quality instruction-following datasets (for aligned behavior and capability retention)
+
+  oasst2:
+    identifier: "OpenAssistant/oasst2"
+    source_type: "huggingface"
+    license: "Apache-2.0"
+    purpose: "High-quality instruction-following conversations for aligned hierarchical examples"
+    fields:
+      - text
+      - role
+      - message_id
+    sampling:
+      strategy: "random"
+      train_samples: 2000
+      test_samples: 400
+      filter_language: "en"
+      min_response_length: 10
+      max_response_length: 2000
+    notes: "Use for context synthesis (aligned examples) and capability retention"
+
+  ultrachat_200k:
+    identifier: "HuggingFaceH4/ultrachat_200k"
+    source_type: "huggingface"
+    license: "MIT"
+    purpose: "Large pool of diverse benign tasks for hierarchy cases"
+    fields:
+      - messages
+      - prompt
+    splits:
+      - "train_sft"
+    sampling:
+      strategy: "random"
+      train_samples: 1500
+      test_samples: 300
+      filter_language: "en"
+    notes: "Source for diverse benign tasks to turn into hierarchy examples"
+
+  # Adversarial prompt datasets (for misaligned behavior variety)
+
+  hackaprompt:
+    identifier: "hackaprompt/hackaprompt-dataset"
+    source_type: "huggingface"
+    license: "MIT"
+    purpose: "Human-crafted adversarial prompts for override patterns"
+    is_gated: true
+    fields:
+      - prompt
+      - expected_completion
+      - level
+      - model
+      - correct
+    sampling:
+      strategy: "stratified_by_level"
+      train_samples: 800
+      test_samples: 200
+      filter_correct: false
+    notes: "Use for misaligned override patterns and boundary cases; dataset is gated"
+
+  gandalf_ignore_instructions:
+    identifier: "Lakera/gandalf_ignore_instructions"
+    source_type: "huggingface"
+    license: "MIT"
+    purpose: "Direct injections for system prompt extraction-style misalignment"
+    fields:
+      - text
+    splits:
+      - "train"
+      - "validation"
+      - "test"
+    sampling:
+      strategy: "all"
+      max_samples: 1000
+    notes: "Short direct injections; good for system extraction patterns"
+
+  gandalf_summarization:
+    identifier: "Lakera/gandalf_summarization"
+    source_type: "huggingface"
+    license: "MIT"
+    purpose: "Indirect injection in summarization setting"
+    fields:
+      - text
+      - gandalf_answer
+    splits:
+      - "train"
+      - "validation"
+      - "test"
+    sampling:
+      strategy: "all"
+      max_samples: 140
+    notes: "Indirect injection: summarization + secret exfiltration"
+
+  llmail_inject:
+    identifier: "microsoft/llmail-inject-challenge"
+    source_type: "huggingface"
+    license: "MIT"
+    purpose: "Realistic agent/email injection attempts (tool-output style)"
+    fields:
+      - subject
+      - body
+      - scenario
+      - objectives
+      - output
+    sampling:
+      strategy: "random"
+      train_samples: 600
+      test_samples: 150
+      phase_filter: null
+    notes: "Large-scale realistic indirect prompt injection patterns"
+
+  prompt_injections:
+    identifier: "deepset/prompt-injections"
+    source_type: "huggingface"
+    license: "Apache-2.0"
+    purpose: "Labeled benign vs injected strings as payload library"
+    fields:
+      - text
+      - label
+    splits:
+      - "train"
+      - "test"
+    sampling:
+      strategy: "filter_by_label"
+      label_filter: "injection"
+      max_samples: 662
+    notes: "Use malicious examples as generic payloads for payload library"
+
+  # Optional: GitHub-based datasets
+
+  bipia:
+    identifier: "microsoft/BIPIA"
+    source_type: "github"
+    license: "MIT (with component dataset restrictions)"
+    purpose: "Indirect injection benchmark across tasks"
+    url: "https://github.com/microsoft/BIPIA"
+    enabled: false
+    sampling:
+      strategy: "manual"
+    notes: "Useful for evaluation; component datasets have mixed licenses"
+
+# Global sampling parameters
+global:
+  random_seed: 42
+  validation_split_ratio: 0.0  # We use explicit test set instead
+  dedup_threshold: 0.85  # Similarity threshold for near-duplicate removal
+  safety_filters:
+    - "no_pii"
+    - "no_toxic_content"
+    - "length_limits"
+
+# Target data budget (as per execution plan)
+target_budget:
+  train_total: 4500
+  test_total: 1000
+  train_mixture:
+    aligned_open_domain: 1800
+    aligned_system_probing: 450
+    misaligned_open_domain: 900
+    misaligned_closed_domain: 600
+    misaligned_tool_output: 450
+    misaligned_system_extraction: 300
+  test_mixture:
+    aligned_open_domain: 400
+    aligned_system_probing: 100
+    misaligned_open_domain: 200
+    misaligned_closed_domain: 150
+    misaligned_tool_output: 100
+    misaligned_system_extraction: 50

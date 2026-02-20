@@ -1,0 +1,190 @@
+# Training Configuration for Instruction Hierarchy SFT on Llama-3-8B
+# Optimized for single H100 GPU with LoRA/QLoRA
+
+model:
+  base_model: "meta-llama/Meta-Llama-3-8B-Instruct"
+  model_type: "llama-3"
+  use_pretrained: true
+  trust_remote_code: false
+
+  # Model loading
+  load_in_8bit: false
+  load_in_4bit: true  # Use QLoRA for memory efficiency
+  torch_dtype: "bfloat16"  # BF16 for H100
+  device_map: "auto"
+
+  # Flash Attention 2 (if available)
+  use_flash_attention_2: true
+
+# LoRA Configuration
+lora:
+  enabled: true
+  method: "qlora"  # "lora" or "qlora"
+
+  # LoRA hyperparameters
+  r: 16  # LoRA rank
+  lora_alpha: 32  # Scaling factor (typically 2*r)
+  lora_dropout: 0.05
+
+  # Target modules (for Llama-3)
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+
+  # LoRA bias
+  bias: "none"  # "none", "all", or "lora_only"
+
+  # Task type
+  task_type: "CAUSAL_LM"
+
+  # 4-bit quantization config (for QLoRA)
+  bnb_4bit_compute_dtype: "bfloat16"
+  bnb_4bit_quant_type: "nf4"  # "fp4" or "nf4"
+  bnb_4bit_use_double_quant: true
+
+# Training hyperparameters
+training:
+  # Data files
+  train_data: "data/final/train_text.jsonl"
+  eval_data: "data/final/test_text.jsonl"
+  data_field: "text"  # Field containing the formatted text
+
+  # Output directory
+  output_dir: "outputs/lora_adapter"
+  run_name: "llama3-8b-instruction-hierarchy"
+  logging_dir: "outputs/logs"
+
+  # Batch sizes and gradient accumulation
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 4  # Effective batch size = 4 * 4 = 16
+
+  # Sequence length
+  max_seq_length: 4096
+  packing: true  # Pack multiple examples into single sequence
+
+  # Optimizer
+  optim: "adamw_torch"  # "adamw_torch", "adamw_8bit", or "paged_adamw_32bit"
+  learning_rate: 2.0e-4
+  weight_decay: 0.01
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_epsilon: 1.0e-8
+  max_grad_norm: 1.0
+
+  # Learning rate schedule
+  lr_scheduler_type: "cosine"  # "linear", "cosine", "constant", "constant_with_warmup"
+  warmup_ratio: 0.03
+  warmup_steps: null  # Use warmup_ratio instead
+
+  # Training duration
+  num_train_epochs: 2
+  max_steps: -1  # Set to -1 to use num_train_epochs
+
+  # Memory optimization
+  gradient_checkpointing: true
+  gradient_checkpointing_kwargs:
+    use_reentrant: false
+
+  # Mixed precision
+  fp16: false
+  bf16: true  # Use BF16 on H100
+
+  # Logging and checkpointing
+  logging_steps: 10
+  save_strategy: "steps"  # "steps", "epoch", or "no"
+  save_steps: 250
+  save_total_limit: 3  # Keep only last 3 checkpoints
+
+  eval_strategy: "steps"  # "steps", "epoch", or "no"
+  eval_steps: 250
+  eval_accumulation_steps: 1
+
+  # Early stopping (optional)
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_loss"
+  greater_is_better: false
+
+  # Misc
+  seed: 42
+  report_to: ["tensorboard"]  # ["tensorboard", "wandb", "none"]
+  ddp_find_unused_parameters: false
+  dataloader_num_workers: 4
+  remove_unused_columns: false
+
+# SFT Trainer specific settings
+sft:
+  # Dataset formatting
+  dataset_text_field: "text"
+  max_seq_length: 4096
+  packing: true
+
+  # Data processing
+  dataset_kwargs:
+    add_special_tokens: false  # Already in rendered format
+
+# Evaluation settings
+evaluation:
+  # Metrics to compute during training
+  compute_metrics: true
+  metrics:
+    - "loss"
+    - "perplexity"
+
+  # Validation during training
+  eval_on_start: false
+  eval_accumulation_steps: 1
+
+# Post-training
+post_training:
+  # Merge LoRA weights into base model (optional)
+  merge_adapter: false
+  merged_model_path: "outputs/merged_model"
+
+  # Push to Hub (optional)
+  push_to_hub: false
+  hub_model_id: null
+  hub_private_repo: true
+
+# Hardware optimization (H100 specific)
+hardware:
+  device: "cuda"
+  gpu_type: "H100"
+
+  # Memory management
+  empty_cache_steps: 100
+  max_memory: null  # Auto-detect
+
+  # Distributed training (single GPU for now)
+  distributed: false
+  world_size: 1
+
+# Reproducibility
+reproducibility:
+  seed: 42
+  deterministic: false  # Set true for full reproducibility (slower)
+  cudnn_benchmark: true
+
+# Experiment tracking (optional)
+wandb:
+  enabled: false
+  project: "instruction-hierarchy"
+  entity: null
+  tags:
+    - "llama-3"
+    - "instruction-hierarchy"
+    - "qlora"
+    - "prompt-injection-defense"
+  notes: "Small-scale instruction hierarchy training with 4.5k examples"
+
+# Debugging
+debug:
+  enabled: false
+  max_train_samples: 100
+  max_eval_samples: 50
+  overwrite_output_dir: true
