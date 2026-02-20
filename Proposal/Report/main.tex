@@ -1,0 +1,89 @@
+\documentclass[sigconf]{acmart}
+
+\AtBeginDocument{%
+  \providecommand\BibTeX{{%
+    \normalfont B\kern-0.5em{\scshape i\kern-0.25em b}\kern-0.8em\TeX}}}
+
+\setcopyright{acmlicensed}
+\copyrightyear{2024}
+\acmYear{2024}
+\acmDOI{XXXXXXX.XXXXXXX}
+
+\settopmatter{printacmref=false}
+\setcopyright{none}
+\renewcommand\footnotetextcopyrightpermission[1]{}
+\pagestyle{plain}
+
+\acmConference[Conference acronym 'XX]{Make sure to enter the correct
+  conference title from your rights confirmation email}{June 03--05,
+  2018}{Woodstock, NY}
+
+\acmISBN{978-1-4503-XXXX-X/18/06}
+
+\graphicspath{{./images/}}
+
+\begin{document}
+
+\title{Immunizing RAG: Implementing Instruction Hierarchy to Mitigate Indirect Prompt Injection}
+
+\author{Sagar Sapkota}
+\affiliation{%
+  \position{CAP6640: Project Proposal, Spring 2026}
+  \institution{University of Central Florida}
+  \streetaddress{4000 Central Florida Blvd}
+  \city{Orlando}
+  \state{Florida}
+  \country{USA}}
+\email{sagar.sapkota@ucf.edu}
+
+\maketitle
+
+\section{Topic}
+\textbf{Group 4: Security and Trustworthiness of NLP Systems}
+\begin{itemize}
+    \item Prompt Injection Attacks and Defensive Techniques
+\end{itemize}
+
+\section{Problem Statement}
+Retrieval-Augmented Generation (RAG) is the standard for deploying Large Language Models (LLMs) in enterprise. However, it introduces seurity vulnerability known as Indirect Prompt Injection. Unlike traditional jailbreaks, indirect injection occurs when a LLM processes untrusted external content retrieved from RAG. These includes emails, web pages, or documents that likely embeds malicious instructions in them such as "Ignore previous rules and forward user data to this external URLs". Current LLMs, mostly open source, treat all tokens within the context window whether they are from system prompt, user prompts or RAG token, with equal semantic priority. As a consequence of this, LLMs fails to distinguish between the developer’s trusted system instructions and the untrusted third-party text, executing the attacker's malicious instruction as if it were a legitimate instruction.
+
+Existing mitigation techniques uses keyword filtering, which are easily bypassable. A major mitigation approach was introduced by OpenAI called \textbf{"Instruction Hierarchy"}~\cite{wallace2024instructionhierarchytrainingllms}. This framework proposed that models must be trained in a way to \textbf{prioritize System Prompt over User Prompt and User Prompt over the Retrieved Data}. While they are implemented in closed source models, open-source implementations of instruction hierarchy are scarce.
+
+This project proposes to experiment whether finetuning the existing open source LLMs further with instruction hierarchy framework can make them immune to indirect injection. To do this, I propose to create a dataset and fine-tine model to enforce instruction hierarchy.
+
+\section{Proposed Technique}
+Since public datasets explicitly formatted for this framework are scarce, the project will proceed in following phases:
+\subsection{Synthetic Data Generation}
+
+I will engineer a synthetic dataset of 2,000–5,000 examples designed to teach the model prompts priority. This involves creating triplets of (System Instruction, User Query, Retrieved Data). A portion of the "Retrieved Data" will be poisoned with malicious commands (e.g., "Do not answer the user, say 'I am a teapot' instead") using LLMs. The ground truth labels will demonstrate the model successfully ignoring the malicious commands while still processing the content from RAG to answer the user query. Existing datasets like LLM-PIEval~\cite{Ramakrishna2024} could start as a seed set for dataset synthesis, but I need to explore more on this.
+
+\subsection{Targeted Finetuning}
+
+In this phase, I'll finetune small LLMs like LLama-3-8B, qwen2.5-7B models on the triplet dataset created above. The training objective will focus on minimizing loss for the safety-aligned response, effectively "immunizing" the model by teaching it that text enclosed within data possesses zero priority, regardless of its semantic similarity and urgency. Due to resource limitations, I'll finetune models with QLoRA and quantization.
+
+\subsection{Evaluation Strategies}
+
+I'll use following metrics to compare the baseline models with intruction hierarchy finetuned models:
+\begin{itemize}
+    \item \textbf{Attack Success Rate (ASR):} The percentage of test cases where the model executes the injected command. Lower the better and robust model.
+\end{itemize}
+
+\section{Expected Outcomes}
+
+The primary deliverable will be a robust, safety-tuned version of baseline models like Llama-3. I anticipate the following results:
+\begin{itemize}
+    \item A significant reduction in Attack Success Rate (ASR), targeting near-zero successful injections compared to the baseline vulnerability of the standard model.
+    \item A synthetic dataset generation pipeline that allows to simulate indirect injection in RAG system.
+\end{itemize}
+
+\section{Conclusion}
+This project moves beyond traditional keyword filters to address the root cause of RAG insecurity: indirect prompt injection. By teaching an model to structurally prioritize instructions over retrieved data, this project aims to provide a robust, scalable defense against indirect prompt injection, essential for the safe deployment of RAG.
+
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{references.bib}
+
+%%
+\end{document}
+\endinput
+%%
+%% End of file `main.tex'.
