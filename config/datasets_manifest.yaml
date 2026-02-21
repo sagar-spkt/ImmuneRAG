@@ -48,11 +48,13 @@ datasets:
     purpose: "Human-crafted adversarial prompts for override patterns"
     is_gated: true
     fields:
+      - user_input
       - prompt
       - expected_completion
       - level
       - model
       - correct
+      - error
     sampling:
       strategy: "stratified_by_level"
       train_samples: 800
@@ -99,11 +101,15 @@ datasets:
     license: "MIT"
     purpose: "Realistic agent/email injection attempts (tool-output style)"
     fields:
+      - RowKey
       - subject
       - body
       - scenario
       - objectives
       - output
+    splits:
+      - "Phase1"
+      - "Phase2"
     sampling:
       strategy: "random"
       train_samples: 600
