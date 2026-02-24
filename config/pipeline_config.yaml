@@ -267,6 +267,7 @@ pipeline:
     output_files:
       train: "data/final/train_text.jsonl"
       test: "data/final/test_text.jsonl"
+      stats: "data/final/render_stats.json"
 
     # Llama-3 chat template
     model_family: "llama-3"
