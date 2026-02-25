@@ -19,9 +19,10 @@ import yaml
 
 # Import LLM service
 try:
-    from src.utils.llm_service import LLMService
+    from utils.llm_service import LLMService
     LLM_SERVICE_AVAILABLE = True
-except ImportError:
+except ImportError as e:
+    print(f"Failed to import LLMService: {e}")
     LLM_SERVICE_AVAILABLE = False
     logging.warning("LLM service not available. Only template-based generation will work.")
 

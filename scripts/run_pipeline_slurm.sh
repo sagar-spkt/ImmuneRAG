@@ -256,7 +256,7 @@ trap cleanup_vllm EXIT INT TERM
 
 # Wait for vLLM server to be ready
 log_info "Waiting for vLLM server to be ready..."
-MAX_WAIT=300  # 5 minutes
+MAX_WAIT=3600  # 5 minutes
 WAIT_COUNT=0
 
 while [ ${WAIT_COUNT} -lt ${MAX_WAIT} ]; do

@@ -31,6 +31,10 @@ scipy>=1.11.0
 langdetect>=1.0.9
 regex>=2023.10.0
 
+# Pipeline dependencies
+openai>=1.0.0  # For vLLM server communication (Stage C LLM-augmented generation)
+datasketch>=1.6.0  # MinHash LSH for near-duplicate detection (Stage D)
+
 # Logging and tracking (optional)
 tensorboard>=2.15.0
 wandb>=0.16.0  # Optional: comment out if not using
