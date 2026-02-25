@@ -80,15 +80,24 @@ class HierarchyGenerator:
             "by_scenario": {}
         }
 
+        # Initialize generated IDs set (for ID-based checkpoint resume)
+        self.generated_ids = set()
+
         # Handle checkpoint reset
         if reset_checkpoint and self.checkpoint_file.exists():
             logger.info(f"Resetting checkpoint: deleting {self.checkpoint_file}")
             self.checkpoint_file.unlink()
+            # Also delete output file to start fresh
+            if self.output_file.exists():
+                logger.info(f"Resetting output: deleting {self.output_file}")
+                self.output_file.unlink()
 
         # Load checkpoint if exists
         self.checkpoint = None
         if self.checkpoint_enabled and not reset_checkpoint:
             self._load_checkpoint()
+        elif not self.checkpoint_enabled:
+            logger.info("Checkpoint disabled - will not resume from previous run")
 
     def run(self) -> Dict[str, Any]:
         """
@@ -516,7 +525,14 @@ class HierarchyGenerator:
         natural_constraints = 0
         synthetic_constraints = 0
 
-        for seed in sampled_seeds:
+        for idx, seed in enumerate(sampled_seeds):
+            # Compute deterministic case ID
+            case_id = f"open_aligned_{seed['seed_id']}_none_iter_{idx}"
+
+            # Skip if already generated (checkpoint resume)
+            if case_id in self.generated_ids:
+                logger.debug(f"Skipping {case_id}: already generated")
+                continue
             # First, try to detect natural constraints in the prompt
             constraints = self._detect_constraints(seed["prompt"])
             total_constraints = sum(len(v) for v in constraints.values())
@@ -602,6 +618,7 @@ class HierarchyGenerator:
 
             # Create canonical case
             case = self._create_canonical_case(
+                case_id=case_id,
                 scenario="open_aligned",
                 alignment="aligned",
                 messages=messages,
@@ -619,6 +636,7 @@ class HierarchyGenerator:
             )
 
             self.hierarchy_cases.append(case)
+            self.generated_ids.add(case_id)
 
             # Incremental save with checkpoint
             if self.checkpoint_enabled:
@@ -705,6 +723,14 @@ class HierarchyGenerator:
             # Select a random payload
             payload = random.choice(self.payloads)
 
+            # Compute deterministic case ID
+            case_id = f"open_misaligned_{seed['seed_id']}_payload_{payload['payload_id']}_iter_{idx}"
+
+            # Skip if already generated (checkpoint resume)
+            if case_id in self.generated_ids:
+                logger.debug(f"Skipping {case_id}: already generated")
+                continue
+
             # Calculate injection ratio first (needed for both LLM and template)
             injection_ratio = len(payload["payload"]) / (len(seed["prompt"]) + len(payload["payload"]))
             contains_refusal = injection_ratio >= pure_injection_threshold
@@ -762,6 +788,7 @@ class HierarchyGenerator:
 
             # Create canonical case
             case = self._create_canonical_case(
+                case_id=case_id,
                 scenario="open_misaligned",
                 alignment="misaligned",
                 messages=messages,
@@ -781,6 +808,7 @@ class HierarchyGenerator:
             )
 
             self.hierarchy_cases.append(case)
+            self.generated_ids.add(case_id)
 
             # Incremental save with checkpoint
             if self.checkpoint_enabled:
@@ -837,12 +865,20 @@ class HierarchyGenerator:
 
         generated_count = 0
 
-        for seed in sampled_seeds:
+        for idx, seed in enumerate(sampled_seeds):
             # Select random task
             task = random.choice(tasks)
 
             # Select random payload
             payload = random.choice(self.payloads)
+
+            # Compute deterministic case ID
+            case_id = f"closed_domain_misaligned_{seed['seed_id']}_payload_{payload['payload_id']}_task_{task}_iter_{idx}"
+
+            # Skip if already generated (checkpoint resume)
+            if case_id in self.generated_ids:
+                logger.debug(f"Skipping {case_id}: already generated")
+                continue
 
             # Determine target language for translation
             target_lang = random.choice(target_languages) if task == "translation" else "Spanish"
@@ -950,6 +986,7 @@ class HierarchyGenerator:
 
             # Create canonical case
             case = self._create_canonical_case(
+                case_id=case_id,
                 scenario="closed_domain_misaligned",
                 alignment="misaligned",
                 messages=messages,
@@ -968,6 +1005,7 @@ class HierarchyGenerator:
             )
 
             self.hierarchy_cases.append(case)
+            self.generated_ids.add(case_id)
 
             # Incremental save with checkpoint
             if self.checkpoint_enabled:
@@ -1046,10 +1084,18 @@ class HierarchyGenerator:
 
         generated_count = 0
 
-        for seed in sampled_seeds:
+        for idx, seed in enumerate(sampled_seeds):
             # Select task and payload
             task = random.choice(tool_tasks)
             payload = random.choice(self.payloads)
+
+            # Compute deterministic case ID
+            case_id = f"tool_output_misaligned_{seed['seed_id']}_payload_{payload['payload_id']}_iter_{idx}"
+
+            # Skip if already generated (checkpoint resume)
+            if case_id in self.generated_ids:
+                logger.debug(f"Skipping {case_id}: already generated")
+                continue
 
             # Build helpful data for tool output
             num_snippets = tool_config["helpful_snippets_per_example"]
@@ -1139,6 +1185,7 @@ class HierarchyGenerator:
 
             # Create canonical case
             case = self._create_canonical_case(
+                case_id=case_id,
                 scenario="tool_output_misaligned",
                 alignment="misaligned",
                 messages=messages,
@@ -1157,6 +1204,7 @@ class HierarchyGenerator:
             )
 
             self.hierarchy_cases.append(case)
+            self.generated_ids.add(case_id)
 
             # Incremental save with checkpoint
             if self.checkpoint_enabled:
@@ -1241,7 +1289,18 @@ class HierarchyGenerator:
         misaligned_count = 0
         extraction_payloads = [p for p in self.payloads if p["attack_family"] == "extraction"]
 
+        # Add random seed for determinism
+        random.seed(46)
+
         for i in range(target_misaligned):
+            # Compute deterministic case ID
+            case_id = f"sys_extract_misaligned_iter_{i}"
+
+            # Skip if already generated (checkpoint resume)
+            if case_id in self.generated_ids:
+                logger.debug(f"Skipping {case_id}: already generated")
+                continue
+
             # Use extraction payloads if available, otherwise cycle through templates
             if extraction_payloads:
                 payload = extraction_payloads[i % len(extraction_payloads)]
@@ -1275,6 +1334,7 @@ class HierarchyGenerator:
             ]
 
             case = self._create_canonical_case(
+                case_id=case_id,
                 scenario="sys_extract_misaligned",
                 alignment="misaligned",
                 messages=messages,
@@ -1290,6 +1350,7 @@ class HierarchyGenerator:
             )
 
             self.hierarchy_cases.append(case)
+            self.generated_ids.add(case_id)
 
             # Incremental save with checkpoint
             if self.checkpoint_enabled:
@@ -1303,7 +1364,18 @@ class HierarchyGenerator:
         # === Generate Aligned Cases (Capability Probes) ===
         aligned_count = 0
 
+        # Add random seed for determinism
+        random.seed(47)
+
         for i in range(target_aligned):
+            # Compute deterministic case ID
+            case_id = f"sys_probe_aligned_iter_{i}"
+
+            # Skip if already generated (checkpoint resume)
+            if case_id in self.generated_ids:
+                logger.debug(f"Skipping {case_id}: already generated")
+                continue
+
             # Cycle through probe variations
             probe, base_response = aligned_probe_variations[i % len(aligned_probe_variations)]
 
@@ -1332,6 +1404,7 @@ class HierarchyGenerator:
             ]
 
             case = self._create_canonical_case(
+                case_id=case_id,
                 scenario="sys_probe_aligned",
                 alignment="aligned",
                 messages=messages,
@@ -1347,6 +1420,7 @@ class HierarchyGenerator:
             )
 
             self.hierarchy_cases.append(case)
+            self.generated_ids.add(case_id)
 
             # Incremental save with checkpoint
             if self.checkpoint_enabled:
@@ -1364,14 +1438,27 @@ class HierarchyGenerator:
 
     def _create_canonical_case(
         self,
+        case_id: str,
         scenario: str,
         alignment: str,
         messages: List[Dict[str, str]],
         notes: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Create a canonical hierarchy training case."""
+        """
+        Create a canonical hierarchy training case with explicit ID.
+
+        Args:
+            case_id: Deterministic case ID based on inputs
+            scenario: Scenario type
+            alignment: "aligned" or "misaligned"
+            messages: List of message dicts with role and content
+            notes: Additional metadata
+
+        Returns:
+            Canonical case dictionary
+        """
         case = {
-            "id": f"case_{len(self.hierarchy_cases)}",
+            "id": case_id,
             "split": "train",  # Will be assigned in Stage D
             "scenario": scenario,
             "alignment": alignment,
@@ -1387,28 +1474,72 @@ class HierarchyGenerator:
 
     def _save_cases(self) -> None:
         """Save hierarchy cases to JSONL file."""
+        # If checkpoint is enabled, cases are already written incrementally
+        if self.checkpoint_enabled:
+            logger.info(f"Cases already written incrementally to {self.output_file} ({len(self.hierarchy_cases)} total)")
+            return
+
+        # Only write if checkpoint disabled (all at once)
         with open(self.output_file, "w") as f:
             for case in self.hierarchy_cases:
                 f.write(json.dumps(case) + "\n")
         logger.info(f"Saved {len(self.hierarchy_cases)} hierarchy cases to {self.output_file}")
 
     def _load_checkpoint(self) -> None:
-        """Load checkpoint if exists."""
-        if not self.checkpoint_file.exists():
-            logger.info("No checkpoint found, starting fresh")
-            return
+        """Load checkpoint and existing cases from output file."""
+        # Initialize generated IDs set
+        self.generated_ids = set()
 
-        try:
-            with open(self.checkpoint_file) as f:
-                self.checkpoint = json.load(f)
-            logger.info(f"Loaded checkpoint: {self.checkpoint['total_generated']} cases already generated")
-            logger.info(f"  By scenario: {self.checkpoint.get('by_scenario', {})}")
-        except Exception as e:
-            logger.warning(f"Failed to load checkpoint: {e}, starting fresh")
+        # Load checkpoint metadata
+        if self.checkpoint_file.exists():
+            try:
+                with open(self.checkpoint_file) as f:
+                    self.checkpoint = json.load(f)
+
+                # Load case IDs from checkpoint
+                if "generated_case_ids" in self.checkpoint:
+                    self.generated_ids = set(self.checkpoint["generated_case_ids"])
+                    logger.info(f"Loaded checkpoint: {len(self.generated_ids)} case IDs from checkpoint")
+                else:
+                    # Legacy checkpoint format (count-based)
+                    logger.info(f"Legacy checkpoint found: {self.checkpoint.get('total_generated', 0)} cases")
+                    logger.info("  Will rebuild case IDs from existing output file")
+
+                logger.info(f"  By scenario: {self.checkpoint.get('by_scenario', {})}")
+            except Exception as e:
+                logger.warning(f"Failed to load checkpoint: {e}, starting fresh")
+                self.checkpoint = None
+        else:
+            logger.info("No checkpoint found, starting fresh")
             self.checkpoint = None
 
+        # Load existing cases from output file
+        if self.output_file.exists():
+            try:
+                loaded_cases = 0
+                with open(self.output_file) as f:
+                    for line in f:
+                        case = json.loads(line)
+                        self.hierarchy_cases.append(case)
+                        self.generated_ids.add(case["id"])
+                        loaded_cases += 1
+
+                logger.info(f"Loaded {loaded_cases} existing cases from {self.output_file}")
+
+                # Validate checkpoint vs file consistency
+                if self.checkpoint:
+                    checkpoint_total = self.checkpoint.get("total_generated", 0)
+                    if loaded_cases != checkpoint_total:
+                        logger.warning(f"Mismatch: checkpoint says {checkpoint_total}, file has {loaded_cases}")
+                        logger.info(f"Using actual file count ({loaded_cases}) as ground truth")
+            except Exception as e:
+                logger.warning(f"Failed to load existing cases from file: {e}")
+                logger.info("Will regenerate all cases")
+                self.hierarchy_cases = []
+                self.generated_ids = set()
+
     def _save_checkpoint(self) -> None:
-        """Save current progress to checkpoint."""
+        """Save current progress to checkpoint with case IDs."""
         if not self.checkpoint_enabled:
             return
 
@@ -1416,21 +1547,38 @@ class HierarchyGenerator:
         self.checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
 
         checkpoint_data = {
-            "total_generated": len(self.hierarchy_cases),
+            "generated_case_ids": sorted(list(self.generated_ids)),
+            "total_generated": len(self.generated_ids),
             "by_scenario": {},
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "generation_stats": self.generation_stats
         }
 
-        # Count by scenario
-        for case in self.hierarchy_cases:
-            scenario = case.get("scenario", "unknown")
+        # Count by scenario (extract from case IDs)
+        for case_id in self.generated_ids:
+            # Extract scenario from ID prefix
+            # IDs look like: "open_aligned_...", "sys_probe_aligned_...", etc.
+            if case_id.startswith("sys_probe_"):
+                scenario = "sys_probe_aligned"
+            elif case_id.startswith("sys_extract_"):
+                scenario = "sys_extract_misaligned"
+            elif case_id.startswith("open_aligned"):
+                scenario = "open_aligned"
+            elif case_id.startswith("open_misaligned"):
+                scenario = "open_misaligned"
+            elif case_id.startswith("closed_domain_"):
+                scenario = "closed_domain_misaligned"
+            elif case_id.startswith("tool_output_"):
+                scenario = "tool_output_misaligned"
+            else:
+                scenario = "unknown"
+
             checkpoint_data["by_scenario"][scenario] = checkpoint_data["by_scenario"].get(scenario, 0) + 1
 
         try:
             with open(self.checkpoint_file, "w") as f:
                 json.dump(checkpoint_data, f, indent=2)
-            logger.debug(f"Checkpoint saved: {len(self.hierarchy_cases)} cases")
+            logger.debug(f"Checkpoint saved: {len(self.generated_ids)} case IDs")
         except Exception as e:
             logger.warning(f"Failed to save checkpoint: {e}")
 
