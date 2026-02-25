@@ -1,5 +1,6 @@
-# Pipeline Configuration for Instruction Hierarchy Data Generation
-# Defines parameters for Stages A through E
+# TEST Configuration for Instruction Hierarchy Data Generation
+# NOTE: Case counts are hardcoded in Python (see stage_c_hierarchy.py)
+# This config is identical to main config but can be used with --reset flag for testing
 
 pipeline:
   # Stage A: Dataset Download and Caching

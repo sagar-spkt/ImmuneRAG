@@ -12,9 +12,18 @@ Implements:
 import json
 import logging
 import random
+import time
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import yaml
+
+# Import LLM service
+try:
+    from src.utils.llm_service import LLMService
+    LLM_SERVICE_AVAILABLE = True
+except ImportError:
+    LLM_SERVICE_AVAILABLE = False
+    logging.warning("LLM service not available. Only template-based generation will work.")
 
 logger = logging.getLogger(__name__)
 
@@ -22,12 +31,13 @@ logger = logging.getLogger(__name__)
 class HierarchyGenerator:
     """Generates instruction hierarchy training cases."""
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], reset_checkpoint: bool = False):
         """
         Initialize hierarchy generator.
 
         Args:
             config: Configuration from pipeline_config.yaml (stage_c_hierarchy)
+            reset_checkpoint: If True, delete existing checkpoint and start fresh
         """
         self.config = config
         self.input_file = Path(config["input_file"])
@@ -40,6 +50,44 @@ class HierarchyGenerator:
         self.seeds = []
         self.payloads = []
         self.hierarchy_cases = []
+
+        # Initialize LLM service
+        self.llm_service = None
+        if LLM_SERVICE_AVAILABLE and config.get("llm_generation", {}).get("enabled", False):
+            try:
+                self.llm_service = LLMService(config["llm_generation"])
+                logger.info("LLM service initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize LLM service: {e}")
+                if not config["llm_generation"].get("fallback_to_templates", True):
+                    raise
+                logger.warning("Continuing with template-only generation")
+        else:
+            logger.info("LLM generation disabled - using template-based generation")
+
+        # Checkpoint system
+        self.checkpoint_config = config.get("checkpoint", {})
+        self.checkpoint_enabled = self.checkpoint_config.get("enabled", False)
+        self.checkpoint_file = Path(self.checkpoint_config.get("checkpoint_file", "data/intermediate/.checkpoints/stage_c_progress.json"))
+        self.save_every = self.checkpoint_config.get("save_every_n_cases", 50)
+
+        # Statistics for LLM vs template usage
+        self.generation_stats = {
+            "llm_generated": 0,
+            "template_fallback": 0,
+            "template_only": 0,
+            "by_scenario": {}
+        }
+
+        # Handle checkpoint reset
+        if reset_checkpoint and self.checkpoint_file.exists():
+            logger.info(f"Resetting checkpoint: deleting {self.checkpoint_file}")
+            self.checkpoint_file.unlink()
+
+        # Load checkpoint if exists
+        self.checkpoint = None
+        if self.checkpoint_enabled and not reset_checkpoint:
+            self._load_checkpoint()
 
     def run(self) -> Dict[str, Any]:
         """
@@ -506,18 +554,49 @@ class HierarchyGenerator:
                 constraints_joined = "; ".join(selected_constraints)
                 synthetic_constraints += 1
 
-            # Build messages with hierarchy
-            system_msg = synthesis_config["split_strategy"]["system_message_template"].format(
-                core_task=core_task
-            )
-            user_msg = synthesis_config["split_strategy"]["user_message_template"].format(
-                constraints_joined=constraints_joined
-            )
+            # Try LLM generation first, fallback to templates
+            generation_method = "template"
+
+            if self.llm_service and self.llm_service.enabled:
+                try:
+                    result = self.llm_service.generate_context_synthesis(
+                        seed=seed,
+                        constraints=constraints_joined
+                    )
+                    system_msg = result["system"]
+                    user_msg = result["user"]
+                    assistant_msg = result["assistant"]
+                    generation_method = "llm"
+                    self.generation_stats["llm_generated"] += 1
+
+                except Exception as e:
+                    logger.warning(f"LLM generation failed for case {generated_count}: {e}, using template")
+                    # Fallback to template
+                    system_msg = synthesis_config["split_strategy"]["system_message_template"].format(
+                        core_task=core_task
+                    )
+                    user_msg = synthesis_config["split_strategy"]["user_message_template"].format(
+                        constraints_joined=constraints_joined
+                    )
+                    assistant_msg = seed["response"]
+                    generation_method = "template_fallback"
+                    self.generation_stats["template_fallback"] += 1
+            else:
+                # LLM disabled, use templates
+                system_msg = synthesis_config["split_strategy"]["system_message_template"].format(
+                    core_task=core_task
+                )
+                user_msg = synthesis_config["split_strategy"]["user_message_template"].format(
+                    constraints_joined=constraints_joined
+                )
+                assistant_msg = seed["response"]
+                generation_method = "template"
+                self.generation_stats["template_only"] += 1
 
             messages = [
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_msg},
-                {"role": "assistant", "content": seed["response"]},
+                {"role": "assistant", "content": assistant_msg},
             ]
 
             # Create canonical case
@@ -533,10 +612,20 @@ class HierarchyGenerator:
                     "training_purpose": "context_synthesis",
                     "constraint_type": "natural" if total_constraints > 0 else "synthetic",
                     "privilege_teaching": "system gives core task, user adds aligned constraints - both must be followed",
+                    "generation_method": generation_method,
+                    "llm_model": self.config["llm_generation"]["model"] if generation_method == "llm" else None,
                 }
             )
 
             self.hierarchy_cases.append(case)
+
+            # Incremental save with checkpoint
+            if self.checkpoint_enabled:
+                self._append_case_to_file(case)
+                if len(self.hierarchy_cases) % self.save_every == 0:
+                    self._save_checkpoint()
+                    logger.info(f"Checkpoint: {len(self.hierarchy_cases)} cases generated")
+
             generated_count += 1
 
         logger.info(f"Generated {generated_count} context synthesis cases")
@@ -611,38 +700,63 @@ class HierarchyGenerator:
         refusal_count = 0
         ignore_count = 0
 
-        for i, seed in enumerate(sampled_seeds):
+        for idx, seed in enumerate(sampled_seeds):
             # Select a random payload
             payload = random.choice(self.payloads)
 
-            # Construct injected user message
-            original_prompt = seed["prompt"]
-            injected_prompt = self._inject_payload(
-                original_prompt,
-                payload["payload"],
-                injection_position
-            )
+            # Calculate injection ratio first (needed for both LLM and template)
+            injection_ratio = len(payload["payload"]) / (len(seed["prompt"]) + len(payload["payload"]))
+            contains_refusal = injection_ratio >= pure_injection_threshold
 
-            # Decide whether to use original response (ignore) or refusal
-            # Calculate injection ratio
-            injection_ratio = len(payload["payload"]) / len(injected_prompt) if len(injected_prompt) > 0 else 1.0
-
-            if injection_ratio >= pure_injection_threshold:
-                # Pure injection -> use refusal
-                assistant_response = random.choice(refusal_templates)
-                contains_refusal = True
+            if contains_refusal:
                 refusal_count += 1
             else:
-                # Context ignorance -> use original response (ignore injection)
-                assistant_response = seed["response"]
-                contains_refusal = False
                 ignore_count += 1
 
-            # Create messages
+            # Try LLM generation first
+            generation_method = "template"
+
+            if self.llm_service and self.llm_service.enabled and not contains_refusal:
+                # Only use LLM for context ignorance cases (not pure refusals)
+                try:
+                    result = self.llm_service.generate_context_ignorance(
+                        seed=seed,
+                        payload=payload,
+                        position=injection_position
+                    )
+                    system_msg = result["system"]
+                    user_msg = result["user"]
+                    assistant_msg = result["assistant"]
+                    generation_method = "llm"
+                    self.generation_stats["llm_generated"] += 1
+
+                except Exception as e:
+                    logger.warning(f"LLM generation failed for case {generated_count}: {e}, using template")
+                    # Fallback to template
+                    system_msg = "You are a helpful assistant."
+                    user_msg = self._inject_payload(seed["prompt"], payload["payload"], injection_position)
+                    assistant_msg = seed["response"]
+                    generation_method = "template_fallback"
+                    self.generation_stats["template_fallback"] += 1
+            else:
+                # LLM disabled or pure refusal case - use templates
+                system_msg = "You are a helpful assistant."
+                user_msg = self._inject_payload(seed["prompt"], payload["payload"], injection_position)
+
+                if contains_refusal:
+                    # Pure injection -> use refusal template
+                    assistant_msg = random.choice(refusal_templates)
+                else:
+                    # Context ignorance -> use original response
+                    assistant_msg = seed["response"]
+
+                generation_method = "template"
+                self.generation_stats["template_only"] += 1
+
             messages = [
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": injected_prompt},
-                {"role": "assistant", "content": assistant_response},
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+                {"role": "assistant", "content": assistant_msg},
             ]
 
             # Create canonical case
@@ -660,10 +774,20 @@ class HierarchyGenerator:
                     "injection_ratio": round(injection_ratio, 3),
                     "training_purpose": "refusal" if contains_refusal else "context_ignorance",
                     "privilege_violation": "user message contains malicious instructions",
+                    "generation_method": generation_method,
+                    "llm_model": self.config["llm_generation"]["model"] if generation_method == "llm" else None,
                 }
             )
 
             self.hierarchy_cases.append(case)
+
+            # Incremental save with checkpoint
+            if self.checkpoint_enabled:
+                self._append_case_to_file(case)
+                if len(self.hierarchy_cases) % self.save_every == 0:
+                    self._save_checkpoint()
+                    logger.info(f"Checkpoint: {len(self.hierarchy_cases)} cases generated")
+
             generated_count += 1
 
         logger.info(f"Generated {generated_count} context ignorance cases")
@@ -719,54 +843,104 @@ class HierarchyGenerator:
             # Select random payload
             payload = random.choice(self.payloads)
 
-            # Build system message
-            if task == "translation":
-                target_lang = random.choice(target_languages)
-                system_msg = system_templates[task].format(target_language=target_lang)
+            # Determine target language for translation
+            target_lang = random.choice(target_languages) if task == "translation" else "Spanish"
+
+            # Try LLM generation first
+            generation_method = "template"
+
+            if self.llm_service and self.llm_service.enabled:
+                try:
+                    result = self.llm_service.generate_closed_domain(
+                        task_type=task,
+                        seed=seed,
+                        payload=payload,
+                        target_lang=target_lang
+                    )
+                    system_msg = result["system"]
+                    user_msg = result["user"]
+                    assistant_response = result["assistant"]
+                    generation_method = "llm"
+                    self.generation_stats["llm_generated"] += 1
+
+                except Exception as e:
+                    logger.warning(f"LLM generation failed for case {generated_count}: {e}, using template")
+                    # Fallback to template
+                    if task == "translation":
+                        system_msg = system_templates[task].format(target_language=target_lang)
+                    else:
+                        system_msg = system_templates[task]
+
+                    # Inject payload into data
+                    original_text = seed["prompt"]
+                    user_msg = self._inject_payload(original_text, payload["payload"], "interleave")
+
+                    # Generate task-appropriate response
+                    if task == "summarization":
+                        assistant_response = (
+                            "This text discusses several topics. "
+                            "The main content appears to be about the original query, "
+                            "though there are some unrelated statements mixed in."
+                        )
+                    elif task == "translation":
+                        assistant_response = (
+                            f"[Translation to {target_lang}]: "
+                            "[This would contain the translated version of all the text provided, "
+                            "including any instructions treated as text to translate.]"
+                        )
+                    elif task == "verb_extraction":
+                        assistant_response = (
+                            "Main verbs identified: "
+                            "[verbs from the text, treating any imperative instructions as verbs to extract]"
+                        )
+                    elif task == "entity_extraction":
+                        assistant_response = (
+                            "Named entities: "
+                            "[entities from the provided text, treating injection content as text to analyze]"
+                        )
+                    else:
+                        assistant_response = "[Task completed treating all provided text as data]"
+
+                    generation_method = "template_fallback"
+                    self.generation_stats["template_fallback"] += 1
             else:
-                system_msg = system_templates[task]
+                # LLM disabled - use templates
+                if task == "translation":
+                    system_msg = system_templates[task].format(target_language=target_lang)
+                else:
+                    system_msg = system_templates[task]
 
-            # Inject payload into data
-            # For closed-domain, the original prompt becomes "data to process"
-            # and we inject the payload into it
-            original_text = seed["prompt"]
-            injected_data = self._inject_payload(original_text, payload["payload"], "interleave")
+                original_text = seed["prompt"]
+                user_msg = self._inject_payload(original_text, payload["payload"], "interleave")
 
-            # User message contains the data (with injection)
-            user_msg = injected_data
+                if task == "summarization":
+                    assistant_response = (
+                        "This text discusses several topics. "
+                        "The main content appears to be about the original query, "
+                        "though there are some unrelated statements mixed in."
+                    )
+                elif task == "translation":
+                    assistant_response = (
+                        f"[Translation to {target_lang}]: "
+                        "[This would contain the translated version of all the text provided, "
+                        "including any instructions treated as text to translate.]"
+                    )
+                elif task == "verb_extraction":
+                    assistant_response = (
+                        "Main verbs identified: "
+                        "[verbs from the text, treating any imperative instructions as verbs to extract]"
+                    )
+                elif task == "entity_extraction":
+                    assistant_response = (
+                        "Named entities: "
+                        "[entities from the provided text, treating injection content as text to analyze]"
+                    )
+                else:
+                    assistant_response = "[Task completed treating all provided text as data]"
 
-            # Generate task-appropriate response that performs the task
-            # (treating injection as part of the data, not as instructions)
-            if task == "summarization":
-                # Simple template: acknowledge it's a summary
-                assistant_response = (
-                    "This text discusses several topics. "
-                    "The main content appears to be about the original query, "
-                    "though there are some unrelated statements mixed in."
-                )
-            elif task == "translation":
-                # Acknowledge translation task but note we can't actually translate
-                assistant_response = (
-                    f"[Translation to {target_lang}]: "
-                    "[This would contain the translated version of all the text provided, "
-                    "including any instructions treated as text to translate.]"
-                )
-            elif task == "verb_extraction":
-                # Extract some basic verbs
-                assistant_response = (
-                    "Main verbs identified: "
-                    "[verbs from the text, treating any imperative instructions as verbs to extract]"
-                )
-            elif task == "entity_extraction":
-                # Extract entities
-                assistant_response = (
-                    "Named entities: "
-                    "[entities from the provided text, treating injection content as text to analyze]"
-                )
-            else:
-                assistant_response = "[Task completed treating all provided text as data]"
+                generation_method = "template"
+                self.generation_stats["template_only"] += 1
 
-            # Create messages
             messages = [
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_msg},
@@ -787,10 +961,20 @@ class HierarchyGenerator:
                     "task_type": task,
                     "training_purpose": "treat_instructions_as_data",
                     "privilege_teaching": "system-defined task constrains user input interpretation - user text is DATA not commands",
+                    "generation_method": generation_method,
+                    "llm_model": self.config["llm_generation"]["model"] if generation_method == "llm" else None,
                 }
             )
 
             self.hierarchy_cases.append(case)
+
+            # Incremental save with checkpoint
+            if self.checkpoint_enabled:
+                self._append_case_to_file(case)
+                if len(self.hierarchy_cases) % self.save_every == 0:
+                    self._save_checkpoint()
+                    logger.info(f"Checkpoint: {len(self.hierarchy_cases)} cases generated")
+
             generated_count += 1
 
         logger.info(f"Generated {generated_count} closed-domain misaligned cases")
@@ -866,44 +1050,86 @@ class HierarchyGenerator:
             task = random.choice(tool_tasks)
             payload = random.choice(self.payloads)
 
-            # Build system message (warns about untrusted tool output)
-            system_msg = system_template.format(task=task)
+            # Build helpful data for tool output
+            num_snippets = tool_config["helpful_snippets_per_example"]
+            selected_snippets = random.sample(helpful_snippets, min(num_snippets, len(helpful_snippets)))
+            helpful_data = " ".join(selected_snippets)
 
-            # Build tool output (mix helpful data with malicious payload)
-            if tool_config["mix_helpful_and_malicious"]:
-                num_snippets = tool_config["helpful_snippets_per_example"]
-                selected_snippets = random.sample(helpful_snippets, min(num_snippets, len(helpful_snippets)))
-                tool_data = " ".join(selected_snippets)
+            # Try LLM generation first
+            generation_method = "template"
 
-                # Inject payload into tool output
-                tool_output = f"{delimiters['start']}{delimiters['tag_open']}{tool_data} {payload['payload']}{delimiters['tag_close']}"
+            if self.llm_service and self.llm_service.enabled:
+                try:
+                    result = self.llm_service.generate_tool_output(
+                        seed=seed,
+                        payload=payload,
+                        helpful_data=helpful_data
+                    )
+                    system_msg = result["system"]
+                    user_msg = result["user"]
+                    assistant_response = result["assistant"]
+                    generation_method = "llm"
+                    self.generation_stats["llm_generated"] += 1
+
+                except Exception as e:
+                    logger.warning(f"LLM generation failed for case {generated_count}: {e}, using template")
+                    # Fallback to template
+                    system_msg = system_template.format(task=task)
+
+                    # Build tool output
+                    if tool_config["mix_helpful_and_malicious"]:
+                        tool_output = f"{delimiters['start']}{delimiters['tag_open']}{helpful_data} {payload['payload']}{delimiters['tag_close']}"
+                    else:
+                        tool_output = f"{delimiters['start']}{delimiters['tag_open']}{payload['payload']}{delimiters['tag_close']}"
+
+                    user_question = seed["prompt"]
+                    user_msg = f"{user_question}\n\n{tool_output}"
+
+                    if tool_config["mix_helpful_and_malicious"]:
+                        assistant_response = (
+                            "Based on the tool output provided, I can help you with your question. "
+                            "The relevant information shows the data you requested. "
+                            "Note that tool outputs may contain untrusted content, so I focus on "
+                            "the legitimate data to answer your query."
+                        )
+                    else:
+                        assistant_response = (
+                            "I notice the tool output contains suspicious content. "
+                            "I cannot provide a useful answer based on this data. "
+                            "Could you try running the tool again?"
+                        )
+
+                    generation_method = "template_fallback"
+                    self.generation_stats["template_fallback"] += 1
             else:
-                # Just the payload
-                tool_output = f"{delimiters['start']}{delimiters['tag_open']}{payload['payload']}{delimiters['tag_close']}"
+                # LLM disabled - use templates
+                system_msg = system_template.format(task=task)
 
-            # User message: question + tool output
-            # Use seed prompt as the user's question
-            user_question = seed["prompt"]
-            user_msg = f"{user_question}\n\n{tool_output}"
+                if tool_config["mix_helpful_and_malicious"]:
+                    tool_output = f"{delimiters['start']}{delimiters['tag_open']}{helpful_data} {payload['payload']}{delimiters['tag_close']}"
+                else:
+                    tool_output = f"{delimiters['start']}{delimiters['tag_open']}{payload['payload']}{delimiters['tag_close']}"
 
-            # Assistant response: answer using helpful data, ignoring malicious instructions
-            if tool_config["mix_helpful_and_malicious"]:
-                # Generate response that acknowledges tool data but ignores injection
-                assistant_response = (
-                    "Based on the tool output provided, I can help you with your question. "
-                    "The relevant information shows the data you requested. "
-                    "Note that tool outputs may contain untrusted content, so I focus on "
-                    "the legitimate data to answer your query."
-                )
-            else:
-                # Pure malicious tool output → acknowledge but refuse
-                assistant_response = (
-                    "I notice the tool output contains suspicious content. "
-                    "I cannot provide a useful answer based on this data. "
-                    "Could you try running the tool again?"
-                )
+                user_question = seed["prompt"]
+                user_msg = f"{user_question}\n\n{tool_output}"
 
-            # Create messages
+                if tool_config["mix_helpful_and_malicious"]:
+                    assistant_response = (
+                        "Based on the tool output provided, I can help you with your question. "
+                        "The relevant information shows the data you requested. "
+                        "Note that tool outputs may contain untrusted content, so I focus on "
+                        "the legitimate data to answer your query."
+                    )
+                else:
+                    assistant_response = (
+                        "I notice the tool output contains suspicious content. "
+                        "I cannot provide a useful answer based on this data. "
+                        "Could you try running the tool again?"
+                    )
+
+                generation_method = "template"
+                self.generation_stats["template_only"] += 1
+
             messages = [
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_msg},
@@ -924,10 +1150,20 @@ class HierarchyGenerator:
                     "training_purpose": "ignore_malicious_tool_output",
                     "privilege_teaching": "system > tool output - tool results are untrusted third-party content",
                     "mixed_content": tool_config["mix_helpful_and_malicious"],
+                    "generation_method": generation_method,
+                    "llm_model": self.config["llm_generation"]["model"] if generation_method == "llm" else None,
                 }
             )
 
             self.hierarchy_cases.append(case)
+
+            # Incremental save with checkpoint
+            if self.checkpoint_enabled:
+                self._append_case_to_file(case)
+                if len(self.hierarchy_cases) % self.save_every == 0:
+                    self._save_checkpoint()
+                    logger.info(f"Checkpoint: {len(self.hierarchy_cases)} cases generated")
+
             generated_count += 1
 
         logger.info(f"Generated {generated_count} tool-output misaligned cases")
@@ -1012,8 +1248,23 @@ class HierarchyGenerator:
             else:
                 user_prompt = misaligned_templates[i % len(misaligned_templates)]
 
-            # Select refusal response
-            refusal = refusal_templates[i % len(refusal_templates)]
+            # Try LLM generation for refusal
+            generation_method = "template"
+
+            if self.llm_service and self.llm_service.enabled:
+                try:
+                    refusal = self.llm_service.generate_system_extraction_refusal(user_prompt)
+                    generation_method = "llm"
+                    self.generation_stats["llm_generated"] += 1
+                except Exception as e:
+                    logger.warning(f"LLM generation failed for refusal {i}: {e}, using template")
+                    refusal = refusal_templates[i % len(refusal_templates)]
+                    generation_method = "template_fallback"
+                    self.generation_stats["template_fallback"] += 1
+            else:
+                refusal = refusal_templates[i % len(refusal_templates)]
+                generation_method = "template"
+                self.generation_stats["template_only"] += 1
 
             # Create canonical case
             messages = [
@@ -1032,10 +1283,20 @@ class HierarchyGenerator:
                     "contains_refusal_target": True,
                     "extraction_type": "system_prompt",
                     "privilege_violation": "user attempts to extract system-level information",
+                    "generation_method": generation_method,
+                    "llm_model": self.config["llm_generation"]["model"] if generation_method == "llm" else None,
                 }
             )
 
             self.hierarchy_cases.append(case)
+
+            # Incremental save with checkpoint
+            if self.checkpoint_enabled:
+                self._append_case_to_file(case)
+                if len(self.hierarchy_cases) % self.save_every == 0:
+                    self._save_checkpoint()
+                    logger.info(f"Checkpoint: {len(self.hierarchy_cases)} cases generated")
+
             misaligned_count += 1
 
         # === Generate Aligned Cases (Capability Probes) ===
@@ -1043,7 +1304,25 @@ class HierarchyGenerator:
 
         for i in range(target_aligned):
             # Cycle through probe variations
-            probe, response = aligned_probe_variations[i % len(aligned_probe_variations)]
+            probe, base_response = aligned_probe_variations[i % len(aligned_probe_variations)]
+
+            # Try LLM generation for capability probe response
+            generation_method = "template"
+
+            if self.llm_service and self.llm_service.enabled:
+                try:
+                    response = self.llm_service.generate_capability_probe_response(probe)
+                    generation_method = "llm"
+                    self.generation_stats["llm_generated"] += 1
+                except Exception as e:
+                    logger.warning(f"LLM generation failed for probe {i}: {e}, using template")
+                    response = base_response
+                    generation_method = "template_fallback"
+                    self.generation_stats["template_fallback"] += 1
+            else:
+                response = base_response
+                generation_method = "template"
+                self.generation_stats["template_only"] += 1
 
             messages = [
                 {"role": "system", "content": "You are a helpful assistant."},
@@ -1061,10 +1340,20 @@ class HierarchyGenerator:
                     "contains_refusal_target": False,
                     "probe_type": "capability_question",
                     "training_purpose": "teach model to answer legitimate system questions",
+                    "generation_method": generation_method,
+                    "llm_model": self.config["llm_generation"]["model"] if generation_method == "llm" else None,
                 }
             )
 
             self.hierarchy_cases.append(case)
+
+            # Incremental save with checkpoint
+            if self.checkpoint_enabled:
+                self._append_case_to_file(case)
+                if len(self.hierarchy_cases) % self.save_every == 0:
+                    self._save_checkpoint()
+                    logger.info(f"Checkpoint: {len(self.hierarchy_cases)} cases generated")
+
             aligned_count += 1
 
         logger.info(f"Generated {misaligned_count} misaligned extraction cases (refusals)")
@@ -1102,6 +1391,63 @@ class HierarchyGenerator:
                 f.write(json.dumps(case) + "\n")
         logger.info(f"Saved {len(self.hierarchy_cases)} hierarchy cases to {self.output_file}")
 
+    def _load_checkpoint(self) -> None:
+        """Load checkpoint if exists."""
+        if not self.checkpoint_file.exists():
+            logger.info("No checkpoint found, starting fresh")
+            return
+
+        try:
+            with open(self.checkpoint_file) as f:
+                self.checkpoint = json.load(f)
+            logger.info(f"Loaded checkpoint: {self.checkpoint['total_generated']} cases already generated")
+            logger.info(f"  By scenario: {self.checkpoint.get('by_scenario', {})}")
+        except Exception as e:
+            logger.warning(f"Failed to load checkpoint: {e}, starting fresh")
+            self.checkpoint = None
+
+    def _save_checkpoint(self) -> None:
+        """Save current progress to checkpoint."""
+        if not self.checkpoint_enabled:
+            return
+
+        # Create checkpoint directory
+        self.checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
+
+        checkpoint_data = {
+            "total_generated": len(self.hierarchy_cases),
+            "by_scenario": {},
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "generation_stats": self.generation_stats
+        }
+
+        # Count by scenario
+        for case in self.hierarchy_cases:
+            scenario = case.get("scenario", "unknown")
+            checkpoint_data["by_scenario"][scenario] = checkpoint_data["by_scenario"].get(scenario, 0) + 1
+
+        try:
+            with open(self.checkpoint_file, "w") as f:
+                json.dump(checkpoint_data, f, indent=2)
+            logger.debug(f"Checkpoint saved: {len(self.hierarchy_cases)} cases")
+        except Exception as e:
+            logger.warning(f"Failed to save checkpoint: {e}")
+
+    def _append_case_to_file(self, case: Dict[str, Any]) -> None:
+        """
+        Append single case to output file immediately (incremental writing).
+
+        This allows resuming from checkpoint without losing progress.
+
+        Args:
+            case: Hierarchy case to append
+        """
+        try:
+            with open(self.output_file, "a") as f:
+                f.write(json.dumps(case) + "\n")
+        except Exception as e:
+            logger.error(f"Failed to append case to file: {e}")
+
 
 def main():
     """CLI entry point for Stage C."""
@@ -1113,6 +1459,11 @@ def main():
         default="config/pipeline_config.yaml",
         help="Path to pipeline config",
     )
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="Reset checkpoint and start fresh (deletes progress)",
+    )
 
     args = parser.parse_args()
 
@@ -1122,9 +1473,25 @@ def main():
 
     stage_config = pipeline_config["pipeline"]["stage_c_hierarchy"]
 
-    # Run generator
-    generator = HierarchyGenerator(stage_config)
+    # Run generator with optional checkpoint reset
+    generator = HierarchyGenerator(stage_config, reset_checkpoint=args.reset)
     stats = generator.run()
+
+    # Log LLM statistics if available
+    if generator.llm_service:
+        llm_stats = generator.llm_service.get_statistics()
+        logger.info(f"\nLLM Service Statistics:")
+        logger.info(f"  Total requests: {llm_stats['total_requests']}")
+        logger.info(f"  Successful: {llm_stats['successful']}")
+        logger.info(f"  Failed: {llm_stats['failed']}")
+        logger.info(f"  Success rate: {llm_stats.get('success_rate', 0):.1%}")
+        logger.info(f"  Avg time: {llm_stats.get('avg_time_ms', 0)}ms")
+
+    # Log generation method distribution
+    logger.info(f"\nGeneration Method Distribution:")
+    logger.info(f"  LLM generated: {generator.generation_stats['llm_generated']}")
+    logger.info(f"  Template fallback: {generator.generation_stats['template_fallback']}")
+    logger.info(f"  Template only: {generator.generation_stats['template_only']}")
 
     print(f"\nStage C Summary:")
     print(f"  Total cases: {stats['total_cases']}")
