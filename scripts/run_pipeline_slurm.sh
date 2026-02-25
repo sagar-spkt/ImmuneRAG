@@ -54,18 +54,46 @@ START_TIME=$(date +%s)
 
 log_info "============================================================"
 log_info "ImmuneRAG Data Preparation Pipeline - SLURM Job"
-log_info "Job ID: ${SLURM_JOB_ID}"
-log_info "Node: ${SLURM_NODELIST}"
+log_info "Job ID: ${SLURM_JOB_ID:-N/A}"
+log_info "Node: ${SLURM_NODELIST:-localhost}"
+log_info "Submit directory: ${SLURM_SUBMIT_DIR:-N/A}"
+log_info "Initial working directory: $(pwd)"
 log_info "============================================================"
 
-# Get project root directory (assumes script is in scripts/ subdirectory)
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "${PROJECT_ROOT}"
+# Get project root directory
+# In SLURM: Use submission directory (where sbatch was run)
+# In interactive mode: Use script location
+if [ -n "${SLURM_SUBMIT_DIR:-}" ]; then
+    PROJECT_ROOT="${SLURM_SUBMIT_DIR}"
+    log_info "Running in SLURM mode, using submission directory"
+else
+    PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    log_info "Running in interactive mode, using script location"
+fi
+
+cd "${PROJECT_ROOT}" || {
+    log_error "Failed to change to project directory: ${PROJECT_ROOT}"
+    exit 1
+}
 
 log_info "Project root: ${PROJECT_ROOT}"
 
+# Verify we're in the correct directory (check for key files)
+if [ ! -f "config/pipeline_config.yaml" ] || [ ! -d "src/pipeline" ]; then
+    log_error "Not in ImmuneRAG project directory!"
+    log_error "Expected config/pipeline_config.yaml and src/pipeline/ to exist"
+    log_error "Current directory: $(pwd)"
+    log_error "SLURM_SUBMIT_DIR: ${SLURM_SUBMIT_DIR:-not set}"
+    exit 1
+fi
+
 # Create logs directory if it doesn't exist
-mkdir -p logs
+mkdir -p logs || {
+    log_error "Failed to create logs directory"
+    log_error "Current directory: $(pwd)"
+    log_error "Permissions: $(ls -ld . 2>&1 || echo 'cannot read')"
+    exit 1
+}
 PIPELINE_LOG="logs/pipeline_$(date '+%Y%m%d_%H%M%S').log"
 log_info "Pipeline log: ${PIPELINE_LOG}"
 
