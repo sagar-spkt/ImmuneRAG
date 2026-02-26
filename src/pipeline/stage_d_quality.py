@@ -373,8 +373,18 @@ class QualityControl:
 
         # Check empty content
         for msg in messages:
-            content = msg.get("content", "").strip()
-            if not content:
+            content = msg.get("content", "")
+
+            # Filter out non-string content (lists, dicts, etc.)
+            # This can happen if LLM returns structured data for extraction tasks
+            if not isinstance(content, str):
+                logger.warning(
+                    f"Case {case.get('id', 'unknown')} has non-string content "
+                    f"in {msg.get('role', 'unknown')} message (type: {type(content).__name__}), filtering out"
+                )
+                return False
+
+            if not content.strip():
                 return False
 
         # Message ordering validation
