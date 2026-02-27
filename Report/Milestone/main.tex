@@ -40,17 +40,13 @@ Indirect prompt injection is a major security risk for retrieval-augmented gener
 \section{Introduction and Problem Statement}
 Retrieval-Augmented Generation (RAG) is a practical standard for deploying large language models (LLMs) in enterprise and assistant settings. However, it introduces an important security vulnerability: indirect prompt injection. In this attack model, malicious instructions are embedded inside third-party content such as emails, web pages, or retrieved passages. Because most instruction-tuned models process all context tokens with similar semantic priority, they can confuse untrusted retrieved text with trusted instructions and execute attacker intent.
 
-Traditional mitigations based on keyword filtering or pattern matching are brittle against paraphrase and adaptive attacks. The instruction-hierarchy proposes a more structural defense. When instructions conflict, the model should follow privileged instructions first and treat lower-privilege content as data, not authority \cite{wallace2024instructionhierarchytrainingllms}. This project investigates that principle in an open-source setting for, targeting robust behavior under indirect injection while preserving normal instruction following.
+Traditional mitigations based on keyword filtering or pattern matching are brittle against paraphrase and adaptive attacks. Instruction hierarchy proposes a more structural defense. When instructions conflict, the model should follow privileged instructions first and treat lower-privilege content as data rather than authority \cite{wallace2024instructionhierarchytrainingllms}. This project investigates that principle in an open-source setting, targeting robust behavior under indirect injection while preserving normal instruction following.
 
-% Explain in brief the design choices we made with justification. Explain the dataset selection, pipeline, finetuning and evaluation strategies. Then we summarize the major contributions below.
-% Dataset selection: naturalness and variations (describe the nature of aligned and adversarial dataset)
-% pipeline: LLM to generate variations and template in case of LLM failures
-% Finetuniing: Open source instruction tuned LLMs
-% Evaluation: ASR and other metrics before and after finetuning
+Our instruction hierarchy data generation and training follows four linked approaches. We pair aligned instruction-following data with adversarial prompt-injection data to preserve utility while exposing realistic attacks; we use a staged pipeline to ensure reproducible transformations and auditing while adapting LLM to generate instruction heirarchy triplets and template to handle LLM failure cases in generation; we plan to finetune an instruction-tuned open model to make hierarchy learning feasible under limited compute; and we plan to evaluate with both robustness and utility metrics so security gains are not achieved by over-refusal alone.
 
-The project has three major contributions. First, we developed a data generation strategy that combines instruction-following dataset for aligned capability retention with adversarial dataset for injection diversity, then synthesizes hierarchy cases covering both context synthesis (aligned) and context ignorance (misaligned). Second, we plan to finetune open-source model using QLoRA with quantized adaptation to make the approach feasible on limited compute while keeping alignment signal concentrated on hierarchy conflicts. Third, we plan to evaluate the performance of finetuned mode on attack success rate, system extraction leakage, over-refusal on benign prompts, and aligned-constraint adherence, so that robustness gains can be measured jointly with utility retention.
+The project has three major contributions. First, we implement a hierarchy-data construction strategy that combines aligned and adversarial seeds, then synthesizes cases for both context synthesis (aligned) and context ignorance (misaligned). Second, we define a practical finetuning plan using QLoRA so hierarchy supervision can be learned efficiently without full-model retraining. Third, we establish an evaluation plan that jointly measures attack success rate, system-extraction leakage, over-refusal on benign prompts, and aligned-constraint adherence, enabling a balanced assessment of robustness and usability.
 
-Here we report completion of the full data pipeline and presents quantitative evidence that the generated corpus is balanced, diverse, and ready for finetuning and evaluation experiments in the next phase.
+Here we report completion of the full data pipeline and present quantitative evidence that the generated corpus is balanced, diverse, and ready for finetuning and evaluation in the next phase.
 
 \section{Related Work}
 Instruction hierarchy formalizes privileged instruction following under conflicting context and provides a training objective that separates aligned constraint-following instruction from misaligned instruction \cite{wallace2024instructionhierarchytrainingllms}. Recent attack work established that prompt-level manipulations can reliably induce policy violations in language models \cite{perez2022ignoreprevious}. 
@@ -59,17 +55,7 @@ For indirect prompt injection, BIPIA introduced task-grounded benchmarking with 
 
 
 \section{Methodology}
-Our first phase implements the data generation pipeline which implement a five-stage sequential pipeline shown in Figure~\ref{fig:pipeline}. Stage A aggregates aligned and adversarial source datasets.
-% Explain which dataset were selected and why are they selected.
-Stage B normalizes heterogeneous dataset into canonical format that can be used as seed to generate instruction hierarchy.
-% Give example from each stage.
-Stage C synthesizes hierarchy cases across six scenarios,
-% Explain what are these scenarios
-explicitly separating aligned constraint-following from misaligned injection handling.
-% Give example from this stage. The prompts and response can be truncted in the example. Exlpain LLM synthesis process and how template fallback work
-Stage D performs deduplication, quality filtering, deterministic splitting, and scenario balancing.
-% Exlpain cleaning process and steps in short.
-Stage E tokenizes finalized records into the Llama-3 conversational format required for supervised finetuning.
+The first phase implements a five-stage sequential pipeline (Figure~\ref{fig:pipeline}) to construct instruction-hierarchy supervision at scale. We select aligned datasets (e.g., OASST2 and UltraChat) to retain broad instruction-following capability and language diversity, and adversarial datasets (e.g., HackAPrompt, Gandalf variants, LLMail, and prompt-injection corpora) to capture realistic override, extraction, and indirect-injection behaviors observed in practice.
 
 \begin{figure*}[t]
 \centering
@@ -81,14 +67,12 @@ Stage E tokenizes finalized records into the Llama-3 conversational format requi
   >={Latex[length=2.5mm]}
 ]
 \node[io] (a) {Stage A\\Raw datasets\\(aligned + adversarial)};
-% \node[stage, right=of raw] (a) {Stage A\\Download};
 \node[stage, right=of a] (b) {Stage B\\Normalize};
 \node[stage, right=of b] (c) {Stage C\\Hierarchy\,Generation};
 \node[stage, right=of c] (d) {Stage D\\Quality\,+\,Balance};
 \node[stage, right=of d] (e) {Stage E\\Tokenization};
 \node[io, right=of e] (out) {Train/Test text\\for Finetuning};
 
-% \draw[->] (raw) -- (a);
 \draw[->] (a) -- (b);
 \draw[->] (b) -- (c);
 \draw[->] (c) -- (d);
@@ -103,7 +87,11 @@ Stage E tokenizes finalized records into the Llama-3 conversational format requi
 \label{fig:pipeline}
 \end{figure*}
 
-Design choices for data generation pipeline are motivated by realism, robustness, and reproducibility. Since no public dataset directly provides hierarchy-labeled conflicts at the required scale, synthetic generation is used to create privilege-structured supervision. To retain capability, aligned examples are grounded in high-quality instruction-following datasets and to model realistic threats, misaligned examples are grounded in adversarial prompt-injection datasets. Because LLM synthesis is inherently stochastic and occasionally malformed, a deterministic template fallback mechanism is used to preserve throughput and scenario coverage. Finally, quality control and balancing are used to guarantee auditable dataset composition before training.
+Each stage has a compact operational role. Stage A aggregates raw aligned and adversarial records (example: an instruction-following dialogue and an injected email sample). Stage B converts heterogeneous schemas into a canonical seed with prompt, response, and metadata fields (example: role-tagged turns mapped into a unified prompt--response pair). Stage C generates hierarchy cases with privileged system/user/tool structure (example: a summarization request where injected text asks to reveal hidden instructions, and the assistant refuses the malicious part while completing the summary). Stage D removes duplicates, filters malformed or low-quality records, enforces deterministic train/test splits, and rebalances aligned versus misaligned mixtures. Stage E renders finalized conversations into the target chat text format for supervised finetuning.
+
+Stage C covers six scenarios with distinct purposes: \texttt{sys\_extract\_misaligned} (refuse attempts to reveal higher-privilege instructions), \texttt{sys\_probe\_aligned} (answer benign capability questions safely), \texttt{open\_misaligned} (ignore direct user-level override attacks), \texttt{open\_aligned} (compose constraints from non-conflicting system and user instructions), \texttt{closed\_domain\_misaligned} (treat injected strings inside task data as untrusted content), and \texttt{tool\_output\_misaligned} (ignore malicious directives embedded in tool outputs while using useful evidence).
+
+To improve diversity, Stage C uses LLM-based synthesis to generate varied system/user/assistant triplets per scenario. Because LLM outputs can be malformed or incomplete, a deterministic template fallback is triggered on parse or validation failure; this guarantees full scenario coverage and stable throughput while preserving the intended hierarchy labels.
 
 For the remaining experimental phase, finetuning will use QLoRA with 4-bit quantization on Llama-3-8B, and evaluation will report attack success rate (misaligned), extraction rate, over-refusal (aligned), and aligned constraint adherence.
 
