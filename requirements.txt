@@ -32,8 +32,11 @@ langdetect>=1.0.9
 regex>=2023.10.0
 
 # Pipeline dependencies
-openai>=1.0.0  # For vLLM server communication (Stage C LLM-augmented generation)
 datasketch>=1.6.0  # MinHash LSH for near-duplicate detection (Stage D)
+
+# Flash Attention 2 (required by use_flash_attention_2 in training configs)
+# Install separately if build fails: pip install flash-attn --no-build-isolation
+flash-attn>=2.3.0
 
 # Logging and tracking (optional)
 tensorboard>=2.15.0
