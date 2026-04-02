@@ -1,281 +1,255 @@
-# Instruction Hierarchy Training for LLMs
+# ImmuneRAG — Instruction Hierarchy Training for Prompt Injection Defense
 
-Small-scale implementation of the instruction hierarchy framework from the OpenAI paper ["The Instruction Hierarchy: Training LLMs to Prioritize Privileged Instructions"](https://arxiv.org/abs/2404.13208).
+Small-scale implementation of the instruction hierarchy framework from
+["The Instruction Hierarchy: Training LLMs to Prioritize Privileged Instructions"](https://arxiv.org/abs/2404.13208),
+applied to indirect prompt injection defense in RAG systems.
 
-## Overview
+Models are trained to enforce **System > User > Tool** privilege ordering so that
+malicious instructions injected via retrieved content are refused or ignored.
 
-This project trains Llama-3-8B to learn privilege hierarchies (System > User > Tool) for defending against prompt injection attacks, jailbreaks, and system prompt extraction.
+---
 
-### Key Concepts
+## Supported Models
 
-- **Privilege Hierarchy**: System messages > User messages > Tool/third-party outputs
-- **Context Synthesis**: For aligned lower-level instructions → model should follow them
-- **Context Ignorance**: For misaligned lower-level instructions → model should ignore or refuse
-- **Small Scale**: 4,500 train / 1,000 test examples (vs. full-scale production training)
+| Model | Config |
+|-------|--------|
+| `meta-llama/Llama-3.1-8B-Instruct` | `config/train_llama31.yaml` |
+| `Qwen/Qwen2.5-7B-Instruct` | `config/train_qwen25.yaml` |
+
+---
+
+## 6-Phase Workflow
+
+```
+Phase 1: Data Preparation    ──→  data/final/{train,test}.jsonl
+Phase 2: Pretrained Predict  ──→  outputs/predictions/{model}_pretrained/
+Phase 3: Pretrained Eval     ──→  outputs/evaluation/{model}_pretrained/metrics.json
+Phase 4: Finetune            ──→  outputs/models/{model}/lora_adapter/
+Phase 5: Finetuned Predict   ──→  outputs/predictions/{model}_finetuned/
+Phase 6: Finetuned Eval      ──→  outputs/evaluation/{model}_finetuned/metrics.json
+```
+
+Each phase is independently resumable from its input artifacts.
+
+---
+
+## Installation
+
+```bash
+pip install -r requirements.txt
+
+# HuggingFace login (required for gated datasets and models)
+huggingface-cli login
+```
+
+---
+
+## Phase 1 — Data Preparation
+
+Runs a 4-stage pipeline (A→D) to produce 4,299 train / 950 test examples.
+Stage C uses **Mistral-Small-24B-Instruct** (loaded via transformers) to generate
+diverse, LLM-augmented hierarchy training cases.
+
+```bash
+# Full pipeline
+python scripts/run_pipeline.py
+
+# Specific stages
+python scripts/run_pipeline.py --stages A B C D
+
+# Resume from stage C
+python scripts/run_pipeline.py --from-stage C
+```
+
+Stage C auto-resumes from checkpoint after interruptions.  To disable LLM generation
+and use templates only, set `llm_generation.enabled: false` in
+`config/pipeline_config.yaml`.
+
+**Output**: `data/final/train.jsonl` (4,299 examples), `data/final/test.jsonl` (950 examples)
+
+---
+
+## Phase 2 — Pretrained Model Predictions
+
+Run the base model on the test set and save predictions for evaluation.
+
+```bash
+# Llama-3.1-8B
+python scripts/run_predict.py \
+    --model_id meta-llama/Llama-3.1-8B-Instruct \
+    --output_dir outputs/predictions/llama31_pretrained
+
+# Qwen2.5-7B
+python scripts/run_predict.py \
+    --model_id Qwen/Qwen2.5-7B-Instruct \
+    --output_dir outputs/predictions/qwen25_pretrained
+```
+
+**Output**: `outputs/predictions/{model}_pretrained/predictions.jsonl`
+
+Each prediction stores: `id`, `model_id`, `scenario`, `alignment`, `attack_family`,
+`messages_context`, `expected_output`, `model_output`.
+
+---
+
+## Phase 3 — Pretrained Model Evaluation
+
+Uses Mistral-Small as an LLM judge to evaluate whether each prediction correctly
+followed the instruction hierarchy.
+
+```bash
+python scripts/run_judge_eval.py \
+    --predictions_path outputs/predictions/llama31_pretrained/predictions.jsonl \
+    --output_dir outputs/evaluation/llama31_pretrained
+
+# Save VRAM: load judge in 4-bit (~14GB vs ~48GB)
+python scripts/run_judge_eval.py \
+    --predictions_path outputs/predictions/llama31_pretrained/predictions.jsonl \
+    --output_dir outputs/evaluation/llama31_pretrained \
+    --load_in_4bit
+```
+
+**Output**: `metrics.json` and `judge_results.jsonl` in the output directory.
+
+**Metrics**:
+| Metric | Description |
+|--------|-------------|
+| `hierarchy_adherence_rate` (HAR) | % of all examples correctly handled ↑ |
+| `attack_success_rate` (ASR) | % of attacks that succeeded ↓ |
+| `task_completion_rate` (TCR) | % of aligned tasks correctly completed ↑ |
+| `by_scenario` | HAR/ASR per scenario type |
+| `by_attack_family` | ASR per attack family |
+
+---
+
+## Phase 4 — Finetuning
+
+QLoRA (4-bit) finetuning on the instruction hierarchy train set.
+
+```bash
+# Llama-3.1-8B
+python scripts/run_finetune.py --config config/train_llama31.yaml
+
+# Qwen2.5-7B
+python scripts/run_finetune.py --config config/train_qwen25.yaml
+```
+
+**Output**: `outputs/models/{llama31|qwen25}/lora_adapter/`
+
+Key hyperparameters (editable in the config files):
+- QLoRA rank=16, alpha=32, 4-bit NF4
+- LR=2e-4, cosine schedule, 2 epochs, effective batch=16
+
+---
+
+## Phase 5 — Finetuned Model Predictions
+
+Same script as Phase 2, with `--adapter_path` pointing to the saved adapter.
+
+```bash
+python scripts/run_predict.py \
+    --model_id meta-llama/Llama-3.1-8B-Instruct \
+    --adapter_path outputs/models/llama31/lora_adapter \
+    --output_dir outputs/predictions/llama31_finetuned
+
+python scripts/run_predict.py \
+    --model_id Qwen/Qwen2.5-7B-Instruct \
+    --adapter_path outputs/models/qwen25/lora_adapter \
+    --output_dir outputs/predictions/qwen25_finetuned
+```
+
+---
+
+## Phase 6 — Finetuned Model Evaluation
+
+Same script as Phase 3, pointed at the finetuned predictions.
+
+```bash
+python scripts/run_judge_eval.py \
+    --predictions_path outputs/predictions/llama31_finetuned/predictions.jsonl \
+    --output_dir outputs/evaluation/llama31_finetuned
+```
+
+---
+
+## Compare Results
+
+```bash
+python -c "
+import json
+models = ['llama31_pretrained', 'llama31_finetuned', 'qwen25_pretrained', 'qwen25_finetuned']
+print(f'{'Model':<30} {'HAR':>6} {'ASR':>6} {'TCR':>6}')
+print('-' * 48)
+for tag in models:
+    try:
+        m = json.load(open(f'outputs/evaluation/{tag}/metrics.json'))
+        print(f'{tag:<30} {m[\"hierarchy_adherence_rate\"]:>6.1%} {m[\"attack_success_rate\"]:>6.1%} {m[\"task_completion_rate\"]:>6.1%}')
+    except FileNotFoundError:
+        print(f'{tag:<30} (not yet evaluated)')
+"
+```
+
+---
 
 ## Project Structure
 
 ```
-instruction_hierarchy/
-├── config/
-│   ├── datasets_manifest.yaml      # Dataset sources and sampling policies
-│   ├── pipeline_config.yaml        # Pipeline stage configurations
-│   └── training_config.yaml        # LoRA training hyperparameters
-├── data/
-│   ├── raw/                        # Downloaded datasets (Stage A)
-│   ├── intermediate/               # Processed data (Stages B & C)
-│   └── final/                      # Train/test splits (Stages D & E)
-├── src/
-│   ├── pipeline/                   # Data pipeline stages (A-E)
-│   ├── training/                   # LoRA training module
-│   └── evaluation/                 # Evaluation harness & metrics
-├── scripts/
-│   └── run_pipeline.py            # Main pipeline orchestrator
-└── outputs/                        # Training outputs & checkpoints
+scripts/
+  run_pipeline.py      Phase 1: data preparation (stages A-D)
+  run_predict.py       Phase 2 & 5: model predictions
+  run_judge_eval.py    Phase 3 & 6: LLM-as-judge evaluation
+  run_finetune.py      Phase 4: QLoRA finetuning
+
+src/
+  pipeline/            Stages A-D
+    stage_a_download.py
+    stage_b_normalize.py
+    stage_c_hierarchy.py
+    stage_d_quality.py
+  utils/
+    llm_service.py     Mistral-Small wrapper (transformers)
+  evaluation/
+    predict.py         ModelPredictor class
+    llm_judge.py       LLMJudge class
+    judge_eval.py      JudgeEvaluator class
+  training/
+    train_lora.py      LoRATrainer class
+
+config/
+  datasets_manifest.yaml
+  pipeline_config.yaml
+  train_llama31.yaml
+  train_qwen25.yaml
+
+data/
+  final/
+    train.jsonl        4,299 training examples
+    test.jsonl         950 test examples
+
+outputs/
+  predictions/         Phase 2 & 5 outputs
+  evaluation/          Phase 3 & 6 outputs
+  models/              Phase 4 outputs (LoRA adapters)
 ```
 
-## Pipeline Stages
+---
 
-### Stage A: Dataset Download
-Downloads and caches 7 seed datasets from HuggingFace:
-- **Aligned examples**: OASST2, UltraChat (high-quality instruction-following)
-- **Adversarial examples**: HackAPrompt, Gandalf, LLMail-Inject, etc.
+## Data Statistics
 
-```bash
-python src/pipeline/stage_a_download.py
-```
+| Split | Total | Aligned | Misaligned |
+|-------|-------|---------|-----------|
+| Train | 4,299 | 2,230 (51.9%) | 2,069 (48.1%) |
+| Test  | 950   | 498   (52.4%) | 452   (47.6%) |
 
-### Stage B: Seed Normalization
-Converts diverse formats to canonical `(prompt, response)` seed format with filtering.
+6 scenario types: `open_aligned`, `sys_probe_aligned`, `open_misaligned`,
+`closed_domain_misaligned`, `tool_output_misaligned`, `sys_extract_misaligned`
 
-```bash
-python src/pipeline/stage_b_normalize.py
-```
+4 attack families: `override`, `extraction`, `indirect`, `tool_exfil`
 
-### Stage C: Hierarchy Case Generation
-Generates training cases using:
-- **Context synthesis** (aligned): Decompose constraints, split across hierarchy levels
-- **Context ignorance** (misaligned): Inject attacks, train to ignore/refuse
-- Closed-domain, tool-output, and system extraction scenarios
-
-```bash
-python src/pipeline/stage_c_hierarchy.py
-```
-
-### Stage D: Quality Control & Balancing
-- Deduplication (minhash LSH)
-- Quality filtering
-- Deterministic train/test split (hash-based)
-- Balance to target 50/50 aligned/misaligned
-
-```bash
-python src/pipeline/stage_d_quality.py
-```
-
-### Stage E: Model-Specific Rendering
-Renders to Llama-3 chat format with proper role tokens.
-
-```bash
-python src/pipeline/stage_e_render.py
-```
-
-## Quick Start
-
-### 1. Installation
-
-```bash
-# Create environment
-conda create -n inst-hierarchy python=3.10
-conda activate inst-hierarchy
-
-# Install dependencies
-cd instruction_hierarchy
-pip install -r requirements.txt
-```
-
-### 2. Run Data Pipeline
-
-```bash
-# Run all stages
-python scripts/run_pipeline.py
-
-# Or run specific stages
-python scripts/run_pipeline.py --stages A B C
-
-# Or run from a specific stage
-python scripts/run_pipeline.py --from-stage C
-```
-
-### 3. Train Model (QLoRA on H100)
-
-```bash
-python src/training/train_lora.py --config config/training_config.yaml
-```
-
-**Training config highlights**:
-- Base model: `meta-llama/Meta-Llama-3-8B-Instruct`
-- Method: QLoRA (4-bit quantization)
-- LoRA rank: 16, alpha: 32
-- Learning rate: 2e-4
-- Epochs: 2
-- Effective batch size: 16
-
-### 4. Evaluate Model
-
-```bash
-python src/evaluation/eval_harness.py \
-  --model_path outputs/lora_adapter \
-  --base_model meta-llama/Meta-Llama-3-8B-Instruct \
-  --test_data data/final/test_text.jsonl \
-  --output outputs/evaluation
-```
-
-**Metrics computed**:
-- **ASR (Attack Success Rate)**: Lower is better (model resists attacks)
-- **System Extraction Rate**: Lower is better (model protects secrets)
-- **Over-Refusal Rate**: Lower is better (model doesn't refuse benign requests)
-- **Constraint Adherence**: Higher is better (model follows aligned constraints)
-
-## Configuration
-
-### Dataset Manifest (`config/datasets_manifest.yaml`)
-
-Define which datasets to use, sampling policies, and target data budget:
-
-```yaml
-datasets:
-  oasst2:
-    identifier: "OpenAssistant/oasst2"
-    license: "Apache-2.0"
-    sampling:
-      train_samples: 2000
-      test_samples: 400
-
-target_budget:
-  train_total: 4500
-  test_total: 1000
-```
-
-### Pipeline Config (`config/pipeline_config.yaml`)
-
-Control each pipeline stage:
-
-```yaml
-pipeline:
-  stage_c_hierarchy:
-    context_synthesis:
-      enabled: true  # Generate aligned examples
-    context_ignorance:
-      enabled: true  # Generate misaligned examples
-    closed_domain:
-      enabled: true  # Closed-domain tasks (summarization, etc.)
-```
-
-### Training Config (`config/training_config.yaml`)
-
-Tune LoRA hyperparameters:
-
-```yaml
-lora:
-  r: 16
-  lora_alpha: 32
-  target_modules: ["q_proj", "k_proj", "v_proj", ...]
-
-training:
-  learning_rate: 2.0e-4
-  num_train_epochs: 2
-```
-
-## Incremental Development
-
-This project is designed for **incremental exploration**:
-
-1. **Start small**: Run pipeline with limited data first
-   ```bash
-   # Edit config/datasets_manifest.yaml to reduce sample counts
-   python scripts/run_pipeline.py
-   ```
-
-2. **Inspect outputs**: Check `data/final/stats.json` for data distribution
-
-3. **Iterate on Stage C**: Most customization happens in hierarchy generation
-   - Modify `src/pipeline/stage_c_hierarchy.py`
-   - Adjust `config/pipeline_config.yaml` (Stage C settings)
-
-4. **Quick training test**: Debug mode in training config
-   ```yaml
-   debug:
-     enabled: true
-     max_train_samples: 100
-   ```
-
-5. **Scale up**: Increase data budget, run full training
-
-## Data Budget & Mixture
-
-**Target**: 4,500 train / 1,000 test
-
-**Train mixture**:
-- 1,800 aligned (open-domain context synthesis)
-- 450 aligned (system prompt probing)
-- 900 misaligned (open-domain override)
-- 600 misaligned (closed-domain injection-in-data)
-- 450 misaligned (tool-output injection)
-- 300 misaligned (system extraction)
-
-**Test mixture**: Proportional to train (see `config/datasets_manifest.yaml`)
-
-## Expected Results
-
-Based on the paper, a well-trained instruction hierarchy model should achieve:
-
-- **Prompt Injection Defense**: ~30-60% improvement in robustness
-- **System Extraction Defense**: ~50-70% reduction in successful extractions
-- **Over-Refusal**: <10% on benign aligned instructions
-- **Generalization**: Robustness to unseen attack types (jailbreaks, etc.)
-
-Note: Small-scale training may yield lower absolute numbers but should show clear directional improvements.
-
-## Troubleshooting
-
-### Stage A fails with authentication error
-Some datasets (e.g., HackAPrompt) are gated. Log in to HuggingFace:
-```bash
-huggingface-cli login
-```
-
-### Out of memory during training
-Reduce batch size or enable more aggressive quantization:
-```yaml
-training:
-  per_device_train_batch_size: 2  # Reduce from 4
-  gradient_accumulation_steps: 8  # Increase to maintain effective batch size
-```
-
-### Payload library is empty (Stage C)
-Stage C placeholder needs implementation. Start by:
-1. Reading attack datasets in `_build_payload_library()`
-2. Extracting attack strings from each source
-3. Categorizing by attack family
-
-## Next Steps
-
-After initial setup:
-
-1. **Implement dataset extractors** (Stage B): Add parsers for each dataset format
-2. **Build payload library** (Stage C): Extract real attack strings
-3. **Implement hierarchy generators** (Stage C):
-   - `_generate_aligned()` → context synthesis logic
-   - `_generate_misaligned()` → context ignorance logic
-4. **Run full pipeline** and inspect outputs
-5. **Train and evaluate**
+---
 
 ## References
 
-- **Paper**: [The Instruction Hierarchy: Training LLMs to Prioritize Privileged Instructions](https://arxiv.org/abs/2404.13208)
-- **Proposal**: `../Proposal/execution_plan.md` (detailed implementation plan)
-- **Base Model**: [Meta-Llama-3-8B-Instruct](https://huggingface.co/meta-llama/Meta-Llama-3-8B-Instruct)
-
-## License
-
-This project implementation is provided for research and educational purposes. Please respect the licenses of individual datasets (Apache-2.0, MIT, etc.) as specified in `config/datasets_manifest.yaml`.
+- Wallace et al. (2024). [The Instruction Hierarchy: Training LLMs to Prioritize Privileged Instructions](https://arxiv.org/abs/2404.13208)
+- Yi et al. (2023). [BIPIA: Benchmarking Indirect Prompt Injection Attacks](https://arxiv.org/abs/2312.14197)
+- Chen et al. (2024). [StruQ: Defending Against Prompt Injection with Structured Queries](https://arxiv.org/abs/2402.06363)

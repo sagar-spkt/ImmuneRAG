@@ -1,0 +1,98 @@
+# Training Configuration — Qwen2.5-7B-Instruct
+# Phase 4: QLoRA finetuning on instruction hierarchy train set
+# Run: python scripts/run_finetune.py --config config/train_qwen25.yaml
+
+model:
+  base_model: "Qwen/Qwen2.5-7B-Instruct"
+  model_type: "qwen2"
+  use_pretrained: true
+  trust_remote_code: false
+  load_in_4bit: true        # QLoRA — keeps VRAM under 20GB on H100
+  torch_dtype: "bfloat16"
+  device_map: "auto"
+  use_flash_attention_2: true
+
+lora:
+  enabled: true
+  method: "qlora"
+  r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+  bias: "none"
+  task_type: "CAUSAL_LM"
+  bnb_4bit_compute_dtype: "bfloat16"
+  bnb_4bit_quant_type: "nf4"
+  bnb_4bit_use_double_quant: true
+
+training:
+  train_data: "data/final/train.jsonl"
+  eval_data: "data/final/test.jsonl"
+  output_dir: "outputs/models/qwen25/lora_adapter"
+  run_name: "qwen25-7b-instruction-hierarchy"
+  logging_dir: "outputs/models/qwen25/logs"
+
+  # Batch / accumulation
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 4   # effective batch = 16
+
+  # Optimizer
+  optim: "adamw_torch"
+  learning_rate: 2.0e-4
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.03
+
+  # Duration
+  num_train_epochs: 2
+  max_steps: -1
+
+  # Memory
+  gradient_checkpointing: true
+  gradient_checkpointing_kwargs:
+    use_reentrant: false
+
+  # Precision
+  bf16: true
+  fp16: false
+
+  # Checkpointing
+  logging_steps: 10
+  save_strategy: "steps"
+  save_steps: 250
+  save_total_limit: 3
+  eval_strategy: "steps"
+  eval_steps: 250
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_loss"
+  greater_is_better: false
+
+  # Misc
+  seed: 42
+  report_to: ["tensorboard"]
+  dataloader_num_workers: 4
+  remove_unused_columns: false
+
+sft:
+  max_seq_length: 4096
+  packing: true
+
+post_training:
+  merge_adapter: false
+  merged_model_path: "outputs/models/qwen25/merged"
+  push_to_hub: false
+
+debug:
+  enabled: false
+  max_train_samples: 100
+  max_eval_samples: 50
+  overwrite_output_dir: true

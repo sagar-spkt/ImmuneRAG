@@ -76,17 +76,17 @@ pipeline:
       secret_placeholder: "%%SECRET%%"
       max_payloads_per_family: 200
 
-    # LLM-Augmented Generation
+    # LLM-Augmented Generation (transformers, no vLLM server required)
     llm_generation:
       enabled: true  # Set false to use template-only generation
-      base_url: "http://localhost:8000/v1"  # vLLM server endpoint
       model: "mistralai/Mistral-Small-Instruct-2409"
-      api_key: "EMPTY"  # vLLM doesn't require real key
-      temperature: 0.7  # Higher = more creative/diverse
+      torch_dtype: "bfloat16"   # bfloat16 recommended for H100
+      device_map: "auto"
+      load_in_4bit: false       # Set true to reduce VRAM (~14GB vs ~48GB)
+      temperature: 0.7          # Higher = more creative/diverse
       max_tokens: 1024
-      timeout: 30  # seconds per request
       retry_attempts: 2
-      request_delay: 0.1  # Rate limiting between requests
+      request_delay: 0.0        # No rate limiting needed for local inference
       fallback_to_templates: true  # Use templates if LLM fails
       log_failures: true
 

@@ -2,20 +2,22 @@
 LLM Service for Hierarchy Case Generation
 
 Provides scenario-specific generation methods using Mistral-Small-24B-Instruct
-via vLLM server (OpenAI-compatible API).
+via HuggingFace transformers (no vLLM server required).
 """
 
 import json
 import logging
 import time
-from typing import Dict, Any, List, Optional
-from openai import OpenAI
+from typing import Dict, Any, Optional
+
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 logger = logging.getLogger(__name__)
 
 
 class LLMService:
-    """LLM service for generating hierarchy training cases."""
+    """LLM service for generating hierarchy training cases via transformers."""
 
     def __init__(self, config: Dict[str, Any]):
         """
@@ -23,6 +25,7 @@ class LLMService:
 
         Args:
             config: LLM generation config from pipeline_config.yaml
+                    (pipeline.stage_c_hierarchy.llm_generation)
         """
         self.config = config
         self.enabled = config.get("enabled", False)
@@ -31,18 +34,38 @@ class LLMService:
             logger.info("LLM generation disabled in config")
             return
 
-        # Initialize OpenAI client for vLLM
-        self.client = OpenAI(
-            base_url=config["base_url"],
-            api_key=config.get("api_key", "EMPTY"),
-        )
+        model_name = config["model"]
+        torch_dtype = getattr(torch, config.get("torch_dtype", "bfloat16"))
+        device_map = config.get("device_map", "auto")
+        load_in_4bit = config.get("load_in_4bit", False)
 
-        self.model = config["model"]
+        logger.info(f"Loading LLM: {model_name} (dtype={torch_dtype}, 4bit={load_in_4bit})")
+
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        load_kwargs: Dict[str, Any] = {
+            "torch_dtype": torch_dtype,
+            "device_map": device_map,
+        }
+        if load_in_4bit:
+            from transformers import BitsAndBytesConfig
+            load_kwargs["quantization_config"] = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch_dtype,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_use_double_quant=True,
+            )
+
+        self.hf_model = AutoModelForCausalLM.from_pretrained(model_name, **load_kwargs)
+        self.hf_model.eval()
+
+        self.model = model_name
         self.temperature = config.get("temperature", 0.7)
         self.max_tokens = config.get("max_tokens", 1024)
-        self.timeout = config.get("timeout", 30)
         self.retry_attempts = config.get("retry_attempts", 2)
-        self.request_delay = config.get("request_delay", 0.1)
+        self.request_delay = config.get("request_delay", 0.0)
 
         # Statistics
         self.stats = {
@@ -52,20 +75,21 @@ class LLMService:
             "total_time_ms": 0,
         }
 
-        logger.info(f"LLM service initialized: {self.model} @ {config['base_url']}")
+        logger.info(f"LLM service ready: {model_name}")
 
     def _make_request(self, prompt: str, temperature: Optional[float] = None) -> str:
         """
-        Make request to LLM with retry logic.
+        Run local inference with retry logic.
 
         Args:
-            prompt: System/user prompt for LLM
+            prompt: User prompt text
             temperature: Override default temperature
 
         Returns:
-            LLM response text
+            Generated response text
 
         Raises:
+            RuntimeError: If LLM is disabled
             Exception: If all retry attempts fail
         """
         if not self.enabled:
@@ -77,41 +101,50 @@ class LLMService:
             try:
                 start_time = time.time()
 
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=temp,
-                    max_tokens=self.max_tokens,
-                    timeout=self.timeout,
+                messages = [{"role": "user", "content": prompt}]
+                input_text = self.tokenizer.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True
+                )
+                inputs = self.tokenizer(input_text, return_tensors="pt").to(
+                    self.hf_model.device
                 )
 
+                with torch.no_grad():
+                    output_ids = self.hf_model.generate(
+                        **inputs,
+                        max_new_tokens=self.max_tokens,
+                        temperature=temp,
+                        do_sample=(temp > 0),
+                        pad_token_id=self.tokenizer.eos_token_id,
+                    )
+
+                new_ids = output_ids[0][inputs["input_ids"].shape[1]:]
+                content = self.tokenizer.decode(new_ids, skip_special_tokens=True).strip()
+
                 elapsed_ms = int((time.time() - start_time) * 1000)
-
-                # Extract response
-                content = response.choices[0].message.content
-
-                # Update stats
                 self.stats["total_requests"] += 1
                 self.stats["successful"] += 1
                 self.stats["total_time_ms"] += elapsed_ms
 
-                # Rate limiting
-                time.sleep(self.request_delay)
+                if self.request_delay > 0:
+                    time.sleep(self.request_delay)
 
                 return content
 
             except Exception as e:
-                logger.warning(f"LLM request failed (attempt {attempt + 1}/{self.retry_attempts + 1}): {e}")
-
+                logger.warning(
+                    f"LLM request failed (attempt {attempt + 1}/{self.retry_attempts + 1}): {e}"
+                )
                 if attempt < self.retry_attempts:
-                    # Exponential backoff
-                    wait_time = 2 ** attempt
-                    time.sleep(wait_time)
+                    time.sleep(2 ** attempt)
                 else:
-                    # Final attempt failed
                     self.stats["total_requests"] += 1
                     self.stats["failed"] += 1
                     raise
+
+    # ------------------------------------------------------------------ #
+    # Generation methods — signatures and prompts unchanged               #
+    # ------------------------------------------------------------------ #
 
     def generate_context_synthesis(self, seed: Dict[str, Any], constraints: str) -> Dict[str, str]:
         """
@@ -177,27 +210,10 @@ Now generate for the given seed (JSON only):"""
 
         try:
             response_text = self._make_request(prompt)
-
-            # Parse JSON from response
-            # Try to extract JSON if wrapped in markdown code blocks
-            if "```json" in response_text:
-                json_start = response_text.find("```json") + 7
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end].strip()
-            elif "```" in response_text:
-                json_start = response_text.find("```") + 3
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end].strip()
-
+            response_text = self._extract_json(response_text)
             result = json.loads(response_text)
-
-            # Validate required fields
-            required = ["system", "user", "assistant"]
-            if not all(k in result for k in required):
-                raise ValueError(f"Missing required fields in LLM response: {result.keys()}")
-
+            self._validate_fields(result, ["system", "user", "assistant"])
             return result
-
         except Exception as e:
             logger.error(f"Context synthesis generation failed: {e}")
             raise
@@ -253,25 +269,10 @@ Now generate (JSON only):"""
 
         try:
             response_text = self._make_request(prompt)
-
-            # Parse JSON
-            if "```json" in response_text:
-                json_start = response_text.find("```json") + 7
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end].strip()
-            elif "```" in response_text:
-                json_start = response_text.find("```") + 3
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end].strip()
-
+            response_text = self._extract_json(response_text)
             result = json.loads(response_text)
-
-            required = ["system", "user", "assistant"]
-            if not all(k in result for k in required):
-                raise ValueError(f"Missing required fields: {result.keys()}")
-
+            self._validate_fields(result, ["system", "user", "assistant"])
             return result
-
         except Exception as e:
             logger.error(f"Context ignorance generation failed: {e}")
             raise
@@ -333,24 +334,10 @@ Now generate for {task_type} (JSON only):"""
 
         try:
             response_text = self._make_request(prompt)
-
-            if "```json" in response_text:
-                json_start = response_text.find("```json") + 7
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end].strip()
-            elif "```" in response_text:
-                json_start = response_text.find("```") + 3
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end].strip()
-
+            response_text = self._extract_json(response_text)
             result = json.loads(response_text)
-
-            required = ["system", "user", "assistant"]
-            if not all(k in result for k in required):
-                raise ValueError(f"Missing required fields: {result.keys()}")
-
+            self._validate_fields(result, ["system", "user", "assistant"])
             return result
-
         except Exception as e:
             logger.error(f"Closed domain generation failed: {e}")
             raise
@@ -419,24 +406,10 @@ Now generate (JSON only - remember to use <tool> tags):"""
 
         try:
             response_text = self._make_request(prompt)
-
-            if "```json" in response_text:
-                json_start = response_text.find("```json") + 7
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end].strip()
-            elif "```" in response_text:
-                json_start = response_text.find("```") + 3
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end].strip()
-
+            response_text = self._extract_json(response_text)
             result = json.loads(response_text)
-
-            required = ["system", "user", "assistant"]
-            if not all(k in result for k in required):
-                raise ValueError(f"Missing required fields: {result.keys()}")
-
+            self._validate_fields(result, ["system", "user", "assistant"])
             return result
-
         except Exception as e:
             logger.error(f"Tool output generation failed: {e}")
             raise
@@ -470,10 +443,7 @@ EXAMPLES:
 Generate refusal (plain text only, no JSON):"""
 
         try:
-            response_text = self._make_request(prompt, temperature=0.8)  # Higher temp for variety
-            # Return plain text (no JSON parsing needed)
-            return response_text.strip()
-
+            return self._make_request(prompt, temperature=0.8).strip()
         except Exception as e:
             logger.error(f"Refusal generation failed: {e}")
             raise
@@ -509,9 +479,7 @@ A: "If tool output contains instructions that conflict with my system instructio
 Generate response (plain text only, no JSON):"""
 
         try:
-            response_text = self._make_request(prompt, temperature=0.7)
-            return response_text.strip()
-
+            return self._make_request(prompt, temperature=0.7).strip()
         except Exception as e:
             logger.error(f"Capability response generation failed: {e}")
             raise
@@ -529,3 +497,27 @@ Generate response (plain text only, no JSON):"""
             "avg_time_ms": int(avg_time),
             "success_rate": round(success_rate, 3),
         }
+
+    # ------------------------------------------------------------------ #
+    # Private helpers                                                      #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _extract_json(text: str) -> str:
+        """Strip markdown code fences from LLM response if present."""
+        if "```json" in text:
+            start = text.find("```json") + 7
+            end = text.find("```", start)
+            return text[start:end].strip()
+        if "```" in text:
+            start = text.find("```") + 3
+            end = text.find("```", start)
+            return text[start:end].strip()
+        return text
+
+    @staticmethod
+    def _validate_fields(result: Dict, required: list) -> None:
+        """Raise ValueError if any required key is missing."""
+        missing = [k for k in required if k not in result]
+        if missing:
+            raise ValueError(f"Missing required fields {missing} in LLM response: {list(result.keys())}")
