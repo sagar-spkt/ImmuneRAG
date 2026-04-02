@@ -71,13 +71,18 @@ class LoRATrainer:
             bnb_config = None
 
         # Load model
+        load_kwargs: Dict[str, Any] = {
+            "quantization_config": bnb_config,
+            "torch_dtype": torch.bfloat16 if self.model_config["torch_dtype"] == "bfloat16" else torch.float16,
+            "device_map": self.model_config["device_map"],
+            "trust_remote_code": self.model_config["trust_remote_code"],
+        }
+        if self.model_config.get("use_flash_attention_2", False):
+            load_kwargs["attn_implementation"] = "flash_attention_2"
+
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_config["base_model"],
-            quantization_config=bnb_config,
-            torch_dtype=torch.bfloat16 if self.model_config["torch_dtype"] == "bfloat16" else torch.float16,
-            device_map=self.model_config["device_map"],
-            trust_remote_code=self.model_config["trust_remote_code"],
-            use_flash_attention_2=self.model_config.get("use_flash_attention_2", False),
+            **load_kwargs,
         )
 
         # Prepare model for k-bit training
@@ -142,11 +147,12 @@ class LoRATrainer:
             save_strategy=self.training_config["save_strategy"],
             save_steps=self.training_config["save_steps"],
             save_total_limit=self.training_config["save_total_limit"],
-            evaluation_strategy=self.training_config.get("eval_strategy", "steps"),
+            eval_strategy=self.training_config.get("eval_strategy", "steps"),
             eval_steps=self.training_config.get("eval_steps", 250),
             bf16=self.training_config["bf16"],
             fp16=self.training_config["fp16"],
             gradient_checkpointing=self.training_config["gradient_checkpointing"],
+            gradient_checkpointing_kwargs=self.training_config.get("gradient_checkpointing_kwargs", {}),
             optim=self.training_config["optim"],
             max_grad_norm=self.training_config["max_grad_norm"],
             seed=self.training_config["seed"],
