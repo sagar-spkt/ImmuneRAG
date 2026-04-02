@@ -189,7 +189,7 @@ Examples:
     manifest, pipeline_config = load_configs(args.manifest, args.config)
 
     # Determine which stages to run
-    all_stages = ["A", "B", "C", "D", "E"]
+    all_stages = ["A", "B", "C", "D"]
 
     if args.stages:
         stages_to_run = args.stages
@@ -207,7 +207,6 @@ Examples:
         "B": lambda: run_stage_b(args.manifest, pipeline_config["pipeline"]["stage_b_normalize"]),
         "C": lambda: run_stage_c(pipeline_config["pipeline"]["stage_c_hierarchy"]),
         "D": lambda: run_stage_d(pipeline_config["pipeline"]["stage_d_quality"]),
-        "E": lambda: run_stage_e(pipeline_config["pipeline"]["stage_e_render"]),
     }
 
     results = {}

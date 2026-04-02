@@ -160,13 +160,24 @@ class LoRATrainer:
         # SFT Trainer
         sft_config = self.config.get("sft", {})
 
+        # Apply the model's own chat template on-the-fly; full conversation
+        # (including assistant turn) is included for supervised finetuning.
+        tokenizer = self.tokenizer
+
+        def formatting_func(example):
+            return tokenizer.apply_chat_template(
+                example["messages"],
+                tokenize=False,
+                add_generation_prompt=False,
+            )
+
         trainer = SFTTrainer(
             model=self.model,
             tokenizer=self.tokenizer,
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            dataset_text_field=sft_config.get("dataset_text_field", "text"),
+            formatting_func=formatting_func,
             max_seq_length=sft_config.get("max_seq_length", 4096),
             packing=sft_config.get("packing", True),
         )

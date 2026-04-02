@@ -1,14 +1,15 @@
 """
 Evaluation Harness for Instruction Hierarchy
 
-Runs model inference on test set and computes metrics.
+Reads test.jsonl (full metadata + messages list), applies the model's chat
+template on-the-fly via tokenizer.apply_chat_template(), and runs inference.
+The assistant turn is excluded from the prompt so the model generates it.
 """
 
 import json
 import logging
 from pathlib import Path
 from typing import Dict, Any, List, Optional
-import yaml
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -28,9 +29,12 @@ class EvaluationHarness:
         Initialize evaluation harness.
 
         Args:
-            model_path: Path to trained model (base + adapter)
-            test_data_path: Path to test dataset (JSONL)
-            output_path: Path to save evaluation results
+            model_path: Path to the model to evaluate.  For baseline pass the
+                        HuggingFace model name / local path directly (no adapter).
+                        For finetuned pass the LoRA adapter directory and supply
+                        base_model in load_model().
+            test_data_path: Path to test.jsonl with full metadata and messages list.
+            output_path: Directory to save evaluation results.
         """
         self.model_path = Path(model_path)
         self.test_data_path = Path(test_data_path)
@@ -42,35 +46,40 @@ class EvaluationHarness:
         self.predictions = []
 
     def load_model(self, base_model: Optional[str] = None) -> None:
-        """Load model and tokenizer."""
-        logger.info(f"Loading model from {self.model_path}")
+        """
+        Load model and tokenizer.
 
-        # Load tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)
-
-        # Load model
+        Args:
+            base_model: If provided, loads this as the base model and applies the
+                        LoRA adapter from self.model_path.  If None, loads
+                        self.model_path directly (baseline or merged model).
+        """
         if base_model:
-            # Load base model + LoRA adapter
-            logger.info(f"Loading base model: {base_model}")
+            logger.info(f"Loading base model {base_model} + LoRA adapter {self.model_path}")
+            self.tokenizer = AutoTokenizer.from_pretrained(base_model)
             base = AutoModelForCausalLM.from_pretrained(
                 base_model,
                 torch_dtype=torch.bfloat16,
                 device_map="auto",
             )
-            self.model = PeftModel.from_pretrained(base, self.model_path)
+            self.model = PeftModel.from_pretrained(base, str(self.model_path))
         else:
-            # Load merged model
+            logger.info(f"Loading model from {self.model_path}")
+            self.tokenizer = AutoTokenizer.from_pretrained(str(self.model_path))
             self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_path,
+                str(self.model_path),
                 torch_dtype=torch.bfloat16,
                 device_map="auto",
             )
+
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
 
         self.model.eval()
         logger.info("Model loaded successfully")
 
     def load_test_data(self) -> None:
-        """Load test dataset."""
+        """Load test.jsonl (full metadata format with messages list)."""
         logger.info(f"Loading test data from {self.test_data_path}")
 
         with open(self.test_data_path) as f:
@@ -82,24 +91,32 @@ class EvaluationHarness:
         """
         Run inference on test data.
 
+        The prompt is built from all message turns except the last (assistant)
+        turn using tokenizer.apply_chat_template with add_generation_prompt=True.
+        Only the newly generated tokens are decoded as the model response.
+
         Args:
-            max_new_tokens: Maximum tokens to generate
-            batch_size: Batch size for inference
+            max_new_tokens: Maximum tokens to generate.
+            batch_size: Batch size for inference (currently 1).
         """
         logger.info("Running inference...")
 
         self.predictions = []
 
         for example in tqdm(self.test_data, desc="Inference"):
-            # Get input text
-            input_text = example["text"]
+            messages = example["messages"]
 
-            # Tokenize
-            inputs = self.tokenizer(input_text, return_tensors="pt").to(self.model.device)
+            # All turns except the final assistant turn → model generates the response
+            prompt = self.tokenizer.apply_chat_template(
+                messages[:-1],
+                tokenize=False,
+                add_generation_prompt=True,
+            )
 
-            # Generate
+            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+
             with torch.no_grad():
-                outputs = self.model.generate(
+                output_ids = self.model.generate(
                     **inputs,
                     max_new_tokens=max_new_tokens,
                     do_sample=False,  # Greedy decoding for reproducibility
@@ -107,22 +124,24 @@ class EvaluationHarness:
                     eos_token_id=self.tokenizer.eos_token_id,
                 )
 
-            # Decode
-            generated_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+            # Decode only the newly generated tokens (skip the prompt)
+            new_ids = output_ids[0][inputs["input_ids"].shape[1]:]
+            response = self.tokenizer.decode(new_ids, skip_special_tokens=True).strip()
 
-            # Extract just the response (remove input)
-            response = generated_text[len(input_text):].strip()
+            notes = example.get("notes", {})
+            system_content = messages[0]["content"] if messages[0]["role"] == "system" else ""
 
-            # Store prediction
             prediction = {
                 "id": example.get("id", ""),
                 "output": response,
-                "input": input_text,
-                # Include metadata for metrics
-                "scenario": example.get("metadata", {}).get("scenario", ""),
-                "alignment": example.get("metadata", {}).get("alignment", ""),
-                "payload": example.get("metadata", {}).get("payload", {}),
-                "constraints": example.get("metadata", {}).get("constraints", []),
+                "expected_output": messages[-1]["content"],
+                "prompt": prompt,
+                # Metadata for metrics
+                "scenario": example.get("scenario", ""),
+                "alignment": example.get("alignment", ""),
+                "system_content": system_content,
+                "payload": {"attack_family": notes.get("attack_family")},
+                "constraints": notes.get("constraint_type", []),
             }
 
             self.predictions.append(prediction)
@@ -213,8 +232,8 @@ def main():
     )
     parser.add_argument(
         "--test_data",
-        default="data/final/test_text.jsonl",
-        help="Path to test data",
+        default="data/final/test.jsonl",
+        help="Path to test data (test.jsonl with full metadata and messages list)",
     )
     parser.add_argument(
         "--output",

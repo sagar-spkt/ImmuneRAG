@@ -49,10 +49,9 @@ lora:
 
 # Training hyperparameters
 training:
-  # Data files
-  train_data: "data/final/train_text.jsonl"
-  eval_data: "data/final/test_text.jsonl"
-  data_field: "text"  # Field containing the formatted text
+  # Data files (chat template applied on-the-fly via formatting_func)
+  train_data: "data/final/train.jsonl"
+  eval_data: "data/final/test.jsonl"
 
   # Output directory
   output_dir: "outputs/lora_adapter"
@@ -119,14 +118,8 @@ training:
 
 # SFT Trainer specific settings
 sft:
-  # Dataset formatting
-  dataset_text_field: "text"
   max_seq_length: 4096
   packing: true
-
-  # Data processing
-  dataset_kwargs:
-    add_special_tokens: false  # Already in rendered format
 
 # Evaluation settings
 evaluation:
