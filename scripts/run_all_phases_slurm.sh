@@ -209,11 +209,25 @@ if [ ! -f "requirements.txt" ]; then
     exit 1
 fi
 
+# Step 1: Install torch first — flash-attn's build system requires torch at
+# wheel-build time, so torch must be present before flash-attn is attempted.
+log_info "Installing torch..."
+pip install --quiet "torch>=2.1.0"
+
+# Step 2: Install all other dependencies (flash-attn is NOT in requirements.txt)
+log_info "Installing requirements.txt..."
 pip install --quiet -r requirements.txt
+
+# Step 3: Install flash-attn after torch is available.
+# --no-build-isolation makes the build see the already-installed torch.
+log_info "Installing flash-attn (requires torch, using --no-build-isolation)..."
+pip install --quiet flash-attn --no-build-isolation || \
+    log_warning "flash-attn install failed — Flash Attention 2 will be unavailable. Training will still work but may use more VRAM."
+
 log_success "Dependencies installed"
 
 log_info "Key package versions:"
-pip list 2>/dev/null | grep -E "^(torch|transformers|peft|trl|bitsandbytes|datasets|accelerate)" || true
+pip list 2>/dev/null | grep -E "^(torch|transformers|peft|trl|bitsandbytes|datasets|accelerate|flash)" || true
 
 ################################################################################
 # Pre-flight checks

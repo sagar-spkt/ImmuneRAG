@@ -34,9 +34,8 @@ regex>=2023.10.0
 # Pipeline dependencies
 datasketch>=1.6.0  # MinHash LSH for near-duplicate detection (Stage D)
 
-# Flash Attention 2 (required by use_flash_attention_2 in training configs)
-# Install separately if build fails: pip install flash-attn --no-build-isolation
-flash-attn>=2.3.0
+# flash-attn is NOT listed here — it requires torch to be installed first.
+# The SLURM script installs it separately with --no-build-isolation after torch.
 
 # Logging and tracking (optional)
 tensorboard>=2.15.0
