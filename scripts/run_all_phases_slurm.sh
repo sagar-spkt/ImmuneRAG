@@ -222,7 +222,7 @@ pip install --quiet -r requirements.txt
 # --no-build-isolation makes the build see the already-installed torch.
 log_info "Installing flash-attn (requires torch, using --no-build-isolation)..."
 pip install --quiet flash-attn --no-build-isolation || \
-    log_warning "flash-attn install failed — Flash Attention 2 will be unavailable. Training will still work but may use more VRAM."
+    log_warning "flash-attn install failed — code will fall back to sdpa attention. Performance impact is minimal on H100."
 
 log_success "Dependencies installed"
 

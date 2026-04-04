@@ -78,7 +78,15 @@ class LoRATrainer:
             "trust_remote_code": self.model_config["trust_remote_code"],
         }
         if self.model_config.get("use_flash_attention_2", False):
-            load_kwargs["attn_implementation"] = "flash_attention_2"
+            try:
+                import flash_attn  # noqa: F401
+                load_kwargs["attn_implementation"] = "flash_attention_2"
+            except ImportError:
+                logger.warning(
+                    "flash-attn not installed — falling back to sdpa. "
+                    "Install with: pip install flash-attn --no-build-isolation"
+                )
+                load_kwargs["attn_implementation"] = "sdpa"
 
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_config["base_model"],
