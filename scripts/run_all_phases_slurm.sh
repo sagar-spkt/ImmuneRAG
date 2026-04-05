@@ -204,7 +204,8 @@ fi
 source "${VENV_PATH}/bin/activate"
 log_success "Virtual environment activated: ${VENV_PATH}"
 
-pip install --quiet --upgrade pip setuptools wheel
+# torch 2.11.0 requires setuptools<82; pin it before any other install
+pip install --quiet --upgrade pip wheel "setuptools<82"
 
 ################################################################################
 # Dependency installation
@@ -227,12 +228,13 @@ pip install --quiet -r requirements.txt
 
 # Step 3: Install flash-attn after torch is available.
 # CUDA 13.x has no flash-attn 2.x prebuilt wheel, so we try three tiers:
-#   1) PyTorch's official FA3 wheel index (prebuilt, supports CUDA 13.x / H100)
-#   2) Source build via --no-build-isolation (needs GCC >=9, loaded above)
+#   1) PyTorch wheel index prebuilt binary (--only-binary prevents silent source fallback)
+#   2) Source build via --no-build-isolation (torch visible in venv; needs GCC >=9)
 #   3) sdpa fallback (handled in train_lora.py — no crash)
-log_info "Installing flash-attn (CUDA 13.x — trying PyTorch FA3 prebuilt wheel)..."
+log_info "Installing flash-attn (CUDA 13.x — trying PyTorch wheel index prebuilt binary)..."
 if pip install --quiet flash-attn \
-       --find-links https://download.pytorch.org/whl/flash-attn-3/; then
+       --extra-index-url https://download.pytorch.org/whl/cu130 \
+       --only-binary :all:; then
     log_success "flash-attn installed from prebuilt wheel"
 elif pip install --quiet flash-attn --no-build-isolation; then
     log_success "flash-attn installed (built from source)"

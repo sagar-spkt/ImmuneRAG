@@ -185,7 +185,7 @@ class LoRATrainer:
             dataloader_num_workers=self.training_config.get("dataloader_num_workers", 4),
             remove_unused_columns=self.training_config.get("remove_unused_columns", False),
             # SFT-specific fields (moved from SFTTrainer in TRL >=1.0)
-            max_seq_length=sft_config.get("max_seq_length", 4096),
+            max_length=sft_config.get("max_seq_length", 4096),
             packing=sft_config.get("packing", True),
             dataset_text_field="text",
         )
