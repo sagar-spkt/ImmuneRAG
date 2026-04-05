@@ -16,10 +16,9 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     BitsAndBytesConfig,
-    TrainingArguments,
 )
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-from trl import SFTTrainer
+from trl import SFTTrainer, SFTConfig
 
 logger = logging.getLogger(__name__)
 
@@ -138,8 +137,25 @@ class LoRATrainer:
         """Create SFTTrainer."""
         logger.info("Creating trainer...")
 
-        # Training arguments
-        training_args = TrainingArguments(
+        # SFT Trainer
+        sft_config = self.config.get("sft", {})
+
+        # Pre-apply chat template (TRL >=1.0 removed formatting_func; datasets
+        # must be pre-processed and a text field passed via SFTConfig).
+        tokenizer = self.tokenizer
+
+        def apply_template(example):
+            return {"text": tokenizer.apply_chat_template(
+                example["messages"],
+                tokenize=False,
+                add_generation_prompt=False,
+            )}
+
+        train_dataset = train_dataset.map(apply_template)
+        eval_dataset = eval_dataset.map(apply_template)
+
+        # Training arguments (SFTConfig = TrainingArguments + SFT-specific fields)
+        training_args = SFTConfig(
             output_dir=self.training_config["output_dir"],
             run_name=self.training_config.get("run_name", "instruction-hierarchy"),
             num_train_epochs=self.training_config["num_train_epochs"],
@@ -150,7 +166,6 @@ class LoRATrainer:
             weight_decay=self.training_config["weight_decay"],
             lr_scheduler_type=self.training_config["lr_scheduler_type"],
             warmup_ratio=self.training_config["warmup_ratio"],
-            logging_dir=self.training_config.get("logging_dir", "outputs/logs"),
             logging_steps=self.training_config["logging_steps"],
             save_strategy=self.training_config["save_strategy"],
             save_steps=self.training_config["save_steps"],
@@ -169,31 +184,18 @@ class LoRATrainer:
             metric_for_best_model=self.training_config.get("metric_for_best_model", "eval_loss"),
             dataloader_num_workers=self.training_config.get("dataloader_num_workers", 4),
             remove_unused_columns=self.training_config.get("remove_unused_columns", False),
+            # SFT-specific fields (moved from SFTTrainer in TRL >=1.0)
+            max_seq_length=sft_config.get("max_seq_length", 4096),
+            packing=sft_config.get("packing", True),
+            dataset_text_field="text",
         )
-
-        # SFT Trainer
-        sft_config = self.config.get("sft", {})
-
-        # Apply the model's own chat template on-the-fly; full conversation
-        # (including assistant turn) is included for supervised finetuning.
-        tokenizer = self.tokenizer
-
-        def formatting_func(example):
-            return tokenizer.apply_chat_template(
-                example["messages"],
-                tokenize=False,
-                add_generation_prompt=False,
-            )
 
         trainer = SFTTrainer(
             model=self.model,
-            tokenizer=self.tokenizer,
+            processing_class=self.tokenizer,
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            formatting_func=formatting_func,
-            max_seq_length=sft_config.get("max_seq_length", 4096),
-            packing=sft_config.get("packing", True),
         )
 
         return trainer
