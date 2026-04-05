@@ -184,6 +184,13 @@ else
     log_warning "Anaconda module not found — using system Python"
 fi
 
+if module avail gcc 2>&1 | grep -qi "gcc"; then
+    module load gcc
+    log_success "GCC module loaded ($(gcc --version 2>&1 | head -1))"
+else
+    log_warning "No GCC module found — flash-attn source build may fail if prebuilt wheel is unavailable"
+fi
+
 ################################################################################
 # Virtual environment
 ################################################################################
@@ -219,10 +226,19 @@ log_info "Installing requirements.txt..."
 pip install --quiet -r requirements.txt
 
 # Step 3: Install flash-attn after torch is available.
-# --no-build-isolation makes the build see the already-installed torch.
-log_info "Installing flash-attn (requires torch, using --no-build-isolation)..."
-pip install --quiet flash-attn --no-build-isolation || \
+# CUDA 13.x has no flash-attn 2.x prebuilt wheel, so we try three tiers:
+#   1) PyTorch's official FA3 wheel index (prebuilt, supports CUDA 13.x / H100)
+#   2) Source build via --no-build-isolation (needs GCC >=9, loaded above)
+#   3) sdpa fallback (handled in train_lora.py — no crash)
+log_info "Installing flash-attn (CUDA 13.x — trying PyTorch FA3 prebuilt wheel)..."
+if pip install --quiet flash-attn \
+       --find-links https://download.pytorch.org/whl/flash-attn-3/; then
+    log_success "flash-attn installed from prebuilt wheel"
+elif pip install --quiet flash-attn --no-build-isolation; then
+    log_success "flash-attn installed (built from source)"
+else
     log_warning "flash-attn install failed — code will fall back to sdpa attention. Performance impact is minimal on H100."
+fi
 
 log_success "Dependencies installed"
 
