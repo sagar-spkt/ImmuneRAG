@@ -84,7 +84,7 @@ training:
 
 sft:
   max_seq_length: 4096
-  packing: true
+  packing: false
 
 post_training:
   merge_adapter: false

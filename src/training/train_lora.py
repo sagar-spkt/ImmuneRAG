@@ -140,19 +140,11 @@ class LoRATrainer:
         # SFT Trainer
         sft_config = self.config.get("sft", {})
 
-        # Pre-apply chat template (TRL >=1.0 removed formatting_func; datasets
-        # must be pre-processed and a text field passed via SFTConfig).
-        tokenizer = self.tokenizer
-
-        def apply_template(example):
-            return {"text": tokenizer.apply_chat_template(
-                example["messages"],
-                tokenize=False,
-                add_generation_prompt=False,
-            )}
-
-        train_dataset = train_dataset.map(apply_template)
-        eval_dataset = eval_dataset.map(apply_template)
+        # NOTE: do NOT pre-render to a "text" field. assistant_only_loss=True
+        # requires SFTTrainer to call apply_chat_template internally with
+        # return_assistant_tokens_mask=True so it can mask non-assistant tokens
+        # from the loss. That only works when the dataset is in conversational
+        # format (a "messages" column), so we leave the dataset as-is.
 
         # Training arguments (SFTConfig = TrainingArguments + SFT-specific fields)
         training_args = SFTConfig(
@@ -186,8 +178,14 @@ class LoRATrainer:
             remove_unused_columns=self.training_config.get("remove_unused_columns", False),
             # SFT-specific fields (moved from SFTTrainer in TRL >=1.0)
             max_length=sft_config.get("max_seq_length", 4096),
-            packing=sft_config.get("packing", True),
-            dataset_text_field="text",
+            packing=sft_config.get("packing", False),
+            # Mask non-assistant tokens from the loss. Without this, SFT loss is
+            # computed over the entire rendered chat (system + user + tool +
+            # assistant), which trains the model to fluently reproduce injected
+            # user/tool content and dramatically increases attack success rate.
+            # Requires the dataset in conversational format ("messages" column)
+            # and a chat template that emits {% generation %} tags.
+            assistant_only_loss=True,
         )
 
         trainer = SFTTrainer(
