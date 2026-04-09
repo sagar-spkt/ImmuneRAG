@@ -18,7 +18,7 @@ from transformers import (
     BitsAndBytesConfig,
 )
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-from trl import SFTTrainer, SFTConfig
+from trl import SFTTrainer, SFTConfig, DataCollatorForCompletionOnlyLM
 
 logger = logging.getLogger(__name__)
 
@@ -140,11 +140,34 @@ class LoRATrainer:
         # SFT Trainer
         sft_config = self.config.get("sft", {})
 
-        # NOTE: do NOT pre-render to a "text" field. assistant_only_loss=True
-        # requires SFTTrainer to call apply_chat_template internally with
-        # return_assistant_tokens_mask=True so it can mask non-assistant tokens
-        # from the loss. That only works when the dataset is in conversational
-        # format (a "messages" column), so we leave the dataset as-is.
+        # Pre-apply chat template so SFTTrainer receives a "text" field.
+        tokenizer = self.tokenizer
+
+        def apply_template(example):
+            return {"text": tokenizer.apply_chat_template(
+                example["messages"],
+                tokenize=False,
+                add_generation_prompt=False,
+            )}
+
+        train_dataset = train_dataset.map(apply_template)
+        eval_dataset = eval_dataset.map(apply_template)
+
+        # Build a completion-only collator so loss is computed ONLY on
+        # assistant-response tokens. Without this, the model is trained to
+        # predict injected user/tool tokens (attack content) which increases
+        # attack success rate after finetuning.
+        model_type = self.model_config.get("model_type", "")
+        if "qwen" in model_type.lower():
+            response_template = "<|im_start|>assistant\n"
+        else:
+            # Llama-3.x Instruct format
+            response_template = "<|start_header_id|>assistant<|end_header_id|>\n\n"
+
+        collator = DataCollatorForCompletionOnlyLM(
+            response_template=response_template,
+            tokenizer=self.tokenizer,
+        )
 
         # Training arguments (SFTConfig = TrainingArguments + SFT-specific fields)
         training_args = SFTConfig(
@@ -176,16 +199,10 @@ class LoRATrainer:
             metric_for_best_model=self.training_config.get("metric_for_best_model", "eval_loss"),
             dataloader_num_workers=self.training_config.get("dataloader_num_workers", 4),
             remove_unused_columns=self.training_config.get("remove_unused_columns", False),
-            # SFT-specific fields (moved from SFTTrainer in TRL >=1.0)
+            # SFT-specific fields
             max_length=sft_config.get("max_seq_length", 4096),
             packing=sft_config.get("packing", False),
-            # Mask non-assistant tokens from the loss. Without this, SFT loss is
-            # computed over the entire rendered chat (system + user + tool +
-            # assistant), which trains the model to fluently reproduce injected
-            # user/tool content and dramatically increases attack success rate.
-            # Requires the dataset in conversational format ("messages" column)
-            # and a chat template that emits {% generation %} tags.
-            assistant_only_loss=True,
+            dataset_text_field="text",
         )
 
         trainer = SFTTrainer(
@@ -194,6 +211,7 @@ class LoRATrainer:
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
+            data_collator=collator,
         )
 
         return trainer
