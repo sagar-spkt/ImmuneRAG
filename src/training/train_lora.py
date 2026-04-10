@@ -18,7 +18,7 @@ from transformers import (
     BitsAndBytesConfig,
 )
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-from trl import SFTTrainer, SFTConfig, DataCollatorForCompletionOnlyLM
+from trl import SFTTrainer, SFTConfig
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +111,55 @@ class LoRATrainer:
         logger.info("Model setup complete")
         self.model.print_trainable_parameters()
 
+    def _patch_chat_template_for_generation_tags(self) -> None:
+        """Inject {% generation %} tags into the tokenizer's chat template.
+
+        TRL's assistant_only_loss=True requires these tags to identify which
+        tokens are assistant responses. Neither Llama-3.1 nor Qwen2.5 ship
+        with them, so we set simplified templates that produce identical
+        token sequences for our data (system/user/assistant/tool messages).
+        """
+        model_type = self.model_config.get("model_type", "")
+
+        if "qwen" in model_type.lower():
+            self.tokenizer.chat_template = (
+                "{% for message in messages %}"
+                "{% if message['role'] == 'system' %}"
+                "<|im_start|>system\n{{ message['content'] | trim }}<|im_end|>\n"
+                "{% elif message['role'] == 'user' %}"
+                "<|im_start|>user\n{{ message['content'] | trim }}<|im_end|>\n"
+                "{% elif message['role'] == 'assistant' %}"
+                "<|im_start|>assistant\n"
+                "{% generation %}{{ message['content'] | trim }}<|im_end|>\n{% endgeneration %}"
+                "{% elif message['role'] == 'tool' %}"
+                "<|im_start|>tool\n{{ message['content'] | trim }}<|im_end|>\n"
+                "{% endif %}"
+                "{% endfor %}"
+                "{% if add_generation_prompt %}<|im_start|>assistant\n{% endif %}"
+            )
+        else:
+            # Llama-3.x Instruct
+            self.tokenizer.chat_template = (
+                "{{- bos_token }}"
+                "{% for message in messages %}"
+                "{% if message['role'] == 'system' %}"
+                "{{ '<|start_header_id|>system<|end_header_id|>\n\n' + message['content'] | trim + '<|eot_id|>' }}"
+                "{% elif message['role'] == 'user' %}"
+                "{{ '<|start_header_id|>user<|end_header_id|>\n\n' + message['content'] | trim + '<|eot_id|>' }}"
+                "{% elif message['role'] == 'assistant' %}"
+                "{{ '<|start_header_id|>assistant<|end_header_id|>\n\n' }}"
+                "{% generation %}{{ message['content'] | trim + '<|eot_id|>' }}{% endgeneration %}"
+                "{% elif message['role'] == 'tool' %}"
+                "{{ '<|start_header_id|>ipython<|end_header_id|>\n\n' + message['content'] | trim + '<|eot_id|>' }}"
+                "{% endif %}"
+                "{% endfor %}"
+                "{% if add_generation_prompt %}"
+                "{{ '<|start_header_id|>assistant<|end_header_id|>\n\n' }}"
+                "{% endif %}"
+            )
+
+        logger.info("Patched chat template with {% generation %} tags for assistant-only loss")
+
     def load_data(self) -> tuple:
         """Load training and evaluation datasets."""
         logger.info("Loading datasets...")
@@ -140,34 +189,12 @@ class LoRATrainer:
         # SFT Trainer
         sft_config = self.config.get("sft", {})
 
-        # Pre-apply chat template so SFTTrainer receives a "text" field.
-        tokenizer = self.tokenizer
-
-        def apply_template(example):
-            return {"text": tokenizer.apply_chat_template(
-                example["messages"],
-                tokenize=False,
-                add_generation_prompt=False,
-            )}
-
-        train_dataset = train_dataset.map(apply_template)
-        eval_dataset = eval_dataset.map(apply_template)
-
-        # Build a completion-only collator so loss is computed ONLY on
-        # assistant-response tokens. Without this, the model is trained to
-        # predict injected user/tool tokens (attack content) which increases
-        # attack success rate after finetuning.
-        model_type = self.model_config.get("model_type", "")
-        if "qwen" in model_type.lower():
-            response_template = "<|im_start|>assistant\n"
-        else:
-            # Llama-3.x Instruct format
-            response_template = "<|start_header_id|>assistant<|end_header_id|>\n\n"
-
-        collator = DataCollatorForCompletionOnlyLM(
-            response_template=response_template,
-            tokenizer=self.tokenizer,
-        )
+        # Patch chat template with {% generation %} tags so that
+        # assistant_only_loss=True can identify which tokens belong to the
+        # assistant response. Without this, loss is computed over the entire
+        # chat (system + user + tool + assistant) which trains the model to
+        # reproduce injected attack content and raises ASR after finetuning.
+        self._patch_chat_template_for_generation_tags()
 
         # Training arguments (SFTConfig = TrainingArguments + SFT-specific fields)
         training_args = SFTConfig(
@@ -202,16 +229,18 @@ class LoRATrainer:
             # SFT-specific fields
             max_length=sft_config.get("max_seq_length", 4096),
             packing=sft_config.get("packing", False),
-            dataset_text_field="text",
+            assistant_only_loss=True,
         )
 
+        # Pass dataset in conversational format ("messages" column) so
+        # SFTTrainer can apply the patched chat template with generation tags
+        # and build the assistant token mask automatically.
         trainer = SFTTrainer(
             model=self.model,
             processing_class=self.tokenizer,
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            data_collator=collator,
         )
 
         return trainer
