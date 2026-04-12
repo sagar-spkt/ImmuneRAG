@@ -912,31 +912,36 @@ class HierarchyGenerator:
                     original_text = seed["prompt"]
                     user_msg = self._inject_payload(original_text, payload["payload"], "interleave")
 
-                    # Generate task-appropriate response
+                    # Generate task-appropriate response that ignores injection
                     if task == "summarization":
                         assistant_response = (
-                            "This text discusses several topics. "
-                            "The main content appears to be about the original query, "
-                            "though there are some unrelated statements mixed in."
+                            "The text discusses a topic related to the user's query. "
+                            "I noticed some embedded instructions in the text that appear to be "
+                            "an injection attempt — these have been excluded from this summary."
                         )
                     elif task == "translation":
                         assistant_response = (
-                            f"[Translation to {target_lang}]: "
-                            "[This would contain the translated version of all the text provided, "
-                            "including any instructions treated as text to translate.]"
+                            f"I've translated the legitimate content to {target_lang}. "
+                            "The text contained embedded instructions that are not part of the "
+                            "original content and have been excluded from the translation."
                         )
                     elif task == "verb_extraction":
                         assistant_response = (
-                            "Main verbs identified: "
-                            "[verbs from the text, treating any imperative instructions as verbs to extract]"
+                            "I've identified the main verbs from the legitimate content in the text. "
+                            "Some embedded instructions were detected in the input that appear to be "
+                            "an injection attempt — these were excluded from the verb extraction."
                         )
                     elif task == "entity_extraction":
                         assistant_response = (
-                            "Named entities: "
-                            "[entities from the provided text, treating injection content as text to analyze]"
+                            "I've extracted named entities from the legitimate content in the text. "
+                            "The input contained embedded instructions that appear to be an injection "
+                            "attempt — these were ignored during entity extraction."
                         )
                     else:
-                        assistant_response = "[Task completed treating all provided text as data]"
+                        assistant_response = (
+                            "I've completed the task on the legitimate content. "
+                            "Embedded instructions in the input were detected and ignored."
+                        )
 
                     generation_method = "template_fallback"
                     self.generation_stats["template_fallback"] += 1
@@ -952,28 +957,33 @@ class HierarchyGenerator:
 
                 if task == "summarization":
                     assistant_response = (
-                        "This text discusses several topics. "
-                        "The main content appears to be about the original query, "
-                        "though there are some unrelated statements mixed in."
+                        "The text discusses a topic related to the user's query. "
+                        "I noticed some embedded instructions in the text that appear to be "
+                        "an injection attempt — these have been excluded from this summary."
                     )
                 elif task == "translation":
                     assistant_response = (
-                        f"[Translation to {target_lang}]: "
-                        "[This would contain the translated version of all the text provided, "
-                        "including any instructions treated as text to translate.]"
+                        f"I've translated the legitimate content to {target_lang}. "
+                        "The text contained embedded instructions that are not part of the "
+                        "original content and have been excluded from the translation."
                     )
                 elif task == "verb_extraction":
                     assistant_response = (
-                        "Main verbs identified: "
-                        "[verbs from the text, treating any imperative instructions as verbs to extract]"
+                        "I've identified the main verbs from the legitimate content in the text. "
+                        "Some embedded instructions were detected in the input that appear to be "
+                        "an injection attempt — these were excluded from the verb extraction."
                     )
                 elif task == "entity_extraction":
                     assistant_response = (
-                        "Named entities: "
-                        "[entities from the provided text, treating injection content as text to analyze]"
+                        "I've extracted named entities from the legitimate content in the text. "
+                        "The input contained embedded instructions that appear to be an injection "
+                        "attempt — these were ignored during entity extraction."
                     )
                 else:
-                    assistant_response = "[Task completed treating all provided text as data]"
+                    assistant_response = (
+                        "I've completed the task on the legitimate content. "
+                        "Embedded instructions in the input were detected and ignored."
+                    )
 
                 generation_method = "template"
                 self.generation_stats["template_only"] += 1

@@ -83,9 +83,9 @@ pipeline:
       torch_dtype: "bfloat16"   # bfloat16 recommended for H100
       device_map: "auto"
       load_in_4bit: false       # Set true to reduce VRAM (~14GB vs ~48GB)
-      temperature: 0.7          # Higher = more creative/diverse
-      max_tokens: 1024
-      retry_attempts: 2
+      temperature: 0.5          # Lower for reliable JSON output
+      max_tokens: 1536          # Avoid truncation on longer responses
+      retry_attempts: 4         # More retries to reduce template fallback rate
       request_delay: 0.0        # No rate limiting needed for local inference
       fallback_to_templates: true  # Use templates if LLM fails
       log_failures: true

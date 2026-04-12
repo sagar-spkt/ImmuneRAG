@@ -230,6 +230,7 @@ class LoRATrainer:
             max_length=sft_config.get("max_seq_length", 4096),
             packing=sft_config.get("packing", False),
             assistant_only_loss=True,
+            neftune_noise_alpha=sft_config.get("neftune_noise_alpha", 5.0),
         )
 
         # Pass dataset in conversational format ("messages" column) so
