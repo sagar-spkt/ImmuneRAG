@@ -214,7 +214,7 @@ Now generate for the given seed (JSON only):"""
         try:
             response_text = self._make_request(prompt)
             response_text = self._extract_json(response_text)
-            result = json.loads(response_text)
+            result = json.loads(response_text, strict=False)
             self._validate_fields(result, ["system", "user", "assistant"])
             return result
         except Exception as e:
@@ -273,7 +273,7 @@ Now generate (JSON only):"""
         try:
             response_text = self._make_request(prompt)
             response_text = self._extract_json(response_text)
-            result = json.loads(response_text)
+            result = json.loads(response_text, strict=False)
             self._validate_fields(result, ["system", "user", "assistant"])
             return result
         except Exception as e:
@@ -346,7 +346,7 @@ Now generate for {task_type} (JSON only):"""
         try:
             response_text = self._make_request(prompt)
             response_text = self._extract_json(response_text)
-            result = json.loads(response_text)
+            result = json.loads(response_text, strict=False)
             self._validate_fields(result, ["system", "user", "assistant"])
             return result
         except Exception as e:
@@ -418,7 +418,7 @@ Now generate (JSON only - remember to use <tool> tags):"""
         try:
             response_text = self._make_request(prompt)
             response_text = self._extract_json(response_text)
-            result = json.loads(response_text)
+            result = json.loads(response_text, strict=False)
             self._validate_fields(result, ["system", "user", "assistant"])
             return result
         except Exception as e:
