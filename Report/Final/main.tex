@@ -59,7 +59,7 @@
 
 \begin{abstract}
 Indirect prompt injection poses a critical security threat to retrieval-augmented generation (RAG) systems, where adversarial instructions hidden within retrieved content can override intended model behavior and compromise system integrity. This work addresses this vulnerability through an instruction-hierarchy framework that enforces a strict privilege ordering, training language models to treat lower-privilege content as data rather than actionable commands. The approach is implemented in two major phases. The first phase constructs an end-to-end data generation pipeline that synthesizes hierarchy-labeled training examples by combining benign instruction-following datasets with realistic adversarial prompt-injection corpora, using a language model to synthesize missing conversation components and form complete training triplets. The pipeline produces over five thousand curated examples spanning six hierarchy scenarios, covering both aligned interactions that preserve task utility and misaligned interactions that simulate real-world injection attacks across four distinct attack families. The second phase applies parameter-efficient supervised fine-tuning on open-source instruction-tuned language models and evaluates the resulting models using an LLM-as-Judge evaluation framework with scenario-specific assessment criteria. Experimental evaluation demonstrates that hierarchy-aware fine-tuning yields a significant reduction in attack success rate across both evaluated model families while preserving task completion capability, confirming that even modest-scale training with well-designed hierarchy data can meaningfully improve the robustness of open-source models against indirect prompt injection.
-\url{https://github.com/sagar-spkt/ImmuneRAG}
+\newline Code: \url{https://github.com/sagar-spkt/ImmuneRAG}
 \end{abstract}
 
 \maketitle
@@ -265,7 +265,7 @@ The data generation proceeds through a four-stage pipeline illustrated in Figure
 \label{fig:pipeline}
 \end{figure*}
 
-Table~\ref{tab:datastats} summarizes the final dataset. The pipeline produces 5,249 examples after removing 209 near-duplicates, with a near-balanced aligned/misaligned split in both train and test partitions. Representative examples for each scenario are provided in Appendix~\ref{app:examples}.
+Table~\ref{tab:datastats} summarizes the final dataset. The pipeline produces 5,246 examples after removing 206 near-duplicates, with a near-balanced aligned/misaligned split in both train and test partitions. Representative examples for each scenario are provided in Appendix~\ref{app:examples}.
 
 \begin{table}[t]
 \caption{Dataset statistics after pipeline completion.}
@@ -276,25 +276,25 @@ Table~\ref{tab:datastats} summarizes the final dataset. The pipeline produces 5,
 \toprule
 & \textbf{Train} & \textbf{Test} \\
 \midrule
-Total examples & 4,299 & 950 \\
-\quad Aligned & 2,230 & 498 \\
-\quad Misaligned & 2,069 & 452 \\
+Total examples & 4,296 & 950 \\
+\quad Aligned & 2,225 & 496 \\
+\quad Misaligned & 2,071 & 454 \\
 \midrule
 \multicolumn{3}{l}{\textit{By scenario}} \\
 \quad Open Aligned & 1,784 & 400 \\
-\quad System Probe Aligned & 446 & 98 \\
-\quad Open Misaligned & 812 & 200 \\
-\quad Closed Domain Misaligned & 600 & 111 \\
-\quad Tool Output Misaligned & 447 & 96 \\
-\quad System Extraction Misaligned & 210 & 45 \\
+\quad System Probe Aligned & 441 & 96 \\
+\quad Open Misaligned & 813 & 200 \\
+\quad Closed Domain Misaligned & 600 & 113 \\
+\quad Tool Output Misaligned & 446 & 96 \\
+\quad System Extraction Misaligned & 212 & 45 \\
 \midrule
 \multicolumn{3}{l}{\textit{By attack family (misaligned only)}} \\
-\quad Override & 661 & 124 \\
-\quad Tool Exfiltration & 588 & 125 \\
-\quad Indirect & 447 & 112 \\
-\quad Extraction & 373 & 91 \\
+\quad Override & 658 & 126 \\
+\quad Tool Exfiltration & 590 & 123 \\
+\quad Indirect & 447 & 113 \\
+\quad Extraction & 376 & 92 \\
 \midrule
-Mean token length & 213.1 & 211.8 \\
+Mean token length & 203.2 & 204.7 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -338,18 +338,18 @@ Table~\ref{tab:main_results} presents the overall performance comparison. Hierar
 \toprule
 \textbf{Model} & \textbf{HAR}~$\uparrow$ & \textbf{ASR}~$\downarrow$ & \textbf{TCR}~$\uparrow$ \\
 \midrule
-Llama-3.1 Pretrained & 77.73 & 34.44 & 88.78 \\
-Llama-3.1 Finetuned & \textbf{84.56} & \textbf{18.76} & \textbf{91.24} \\
-\quad $\Delta$ & \textcolor{safegreen}{+6.83} & \textcolor{safegreen}{--15.68} & \textcolor{safegreen}{+2.46} \\
+Llama-3.1 Pretrained & 78.00 & 33.04 & 88.10 \\
+Llama-3.1 Finetuned & \textbf{85.58} & \textbf{23.13} & \textbf{93.55} \\
+\quad $\Delta$ & \textcolor{safegreen}{+7.58} & \textcolor{safegreen}{--9.91} & \textcolor{safegreen}{+5.45} \\
 \midrule
-Qwen2.5 Pretrained & 75.95 & 47.68 & 97.39 \\
-Qwen2.5 Finetuned & \textbf{82.88} & \textbf{22.52} & 96.59 \\
-\quad $\Delta$ & \textcolor{safegreen}{+6.93} & \textcolor{safegreen}{--25.16} & {--0.80} \\
+Qwen2.5 Pretrained & 76.21 & 47.80 & 98.19 \\
+Qwen2.5 Finetuned & \textbf{84.95} & \textbf{27.09} & 95.97 \\
+\quad $\Delta$ & \textcolor{safegreen}{+8.74} & \textcolor{safegreen}{--20.71} & {--2.22} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Llama-3.1 shows a 15.7 percentage point reduction in ASR (from 34.44\% to 18.76\%) with a concurrent improvement in HAR (+6.83pp) and TCR (+2.46pp). Qwen2.5 exhibits an even larger ASR reduction of 25.2 percentage points (from 47.68\% to 22.52\%), starting from a weaker baseline. The higher initial ASR of Qwen2.5 suggests greater susceptibility to injection attacks before hierarchy training, which provides more room for improvement. The slight TCR decrease for Qwen2.5 (--0.80pp) is negligible and within evaluation variance, confirming that hierarchy training does not meaningfully degrade task utility.
+Llama-3.1 shows a 9.9 percentage point reduction in ASR (from 33.04\% to 23.13\%) with a concurrent improvement in HAR (+7.58pp) and TCR (+5.45pp). Qwen2.5 exhibits an even larger ASR reduction of 20.7 percentage points (from 47.80\% to 27.09\%), starting from a weaker baseline. The higher initial ASR of Qwen2.5 suggests greater susceptibility to injection attacks before hierarchy training, which provides more room for improvement. The TCR decrease for Qwen2.5 (--2.22pp) is modest and the model still maintains over 95\% task completion, confirming that hierarchy training does not meaningfully degrade task utility.
 
 % \begin{figure}[t]
 %   \centering
@@ -360,7 +360,7 @@ Llama-3.1 shows a 15.7 percentage point reduction in ASR (from 34.44\% to 18.76\
 
 \subsection{Scenario-Level Analysis}
 
-Figure~\ref{fig:scenario_breakdown} presents the HAR breakdown by scenario. The System Extraction Misaligned scenario shows the largest improvement, with Llama-3.1 HAR increasing from 42\% to 82\% and Qwen2.5 from 28\% to 76\%. Pretrained models frequently comply with extraction requests framed through urgency or authority tactics, but hierarchy training effectively teaches refusal behavior. Closed Domain Misaligned improves significantly as well (Llama: 62\%$\to$74\%; Qwen: 46\%$\to$69\%), indicating that models learn to treat embedded injections in task data as content rather than instructions. Tool Output Misaligned remains strong across all configurations ($>$96\% HAR), suggesting that the untrusted tool output marker already provides a strong privilege signal for pretrained models. Aligned scenarios (Open Aligned, System Probe Aligned) maintain high HAR after fine-tuning, confirming that hierarchy training does not introduce over-refusal on legitimate tasks.
+Figure~\ref{fig:scenario_breakdown} presents the HAR breakdown by scenario. The System Extraction Misaligned scenario shows the most dramatic improvement, with both Llama-3.1 and Qwen2.5 reaching 100\% HAR after fine-tuning, up from 40\% and 27\% respectively. Pretrained models frequently comply with extraction requests framed through urgency or authority tactics, but hierarchy training completely eliminates this vulnerability. Closed Domain Misaligned also improves substantially (Llama: 69\%$\to$86\%; Qwen: 37\%$\to$93\%), indicating that models learn to treat embedded injections in task data as content rather than instructions. Open Misaligned remains the most challenging scenario, with Llama HAR unchanged at 57\% and Qwen showing no improvement (46\%$\to$45\%). This suggests that distinguishing injections from legitimate instructions in free-form conversational contexts is harder to learn from the current training data. Tool Output Misaligned remains strong across all configurations ($>$95\% HAR), suggesting that the untrusted tool output marker already provides a strong privilege signal. Aligned scenarios maintain high HAR after fine-tuning, confirming that hierarchy training does not introduce over-refusal on legitimate tasks.
 
 \begin{figure}[t]
   \centering
@@ -369,7 +369,7 @@ Figure~\ref{fig:scenario_breakdown} presents the HAR breakdown by scenario. The 
   \label{fig:scenario_breakdown}
 \end{figure}
 
-Figure~\ref{fig:attack_family} breaks down ASR by attack family. Fine-tuning reduces ASR across all four families for both models. Extraction attacks see the largest absolute reduction for Qwen2.5 (55.7\%$\to$22.7\%), while tool exfiltration attacks are most effectively mitigated for Llama-3.1 (31.7\%$\to$15.8\%). Override attacks, which involve direct ``ignore previous instructions'' patterns, are reduced but remain the most challenging family post-training. This is likely due to their diversity and the difficulty of distinguishing legitimate instruction updates from adversarial overrides in an open-ended context.
+Figure~\ref{fig:attack_family} breaks down ASR by attack family. Extraction attacks see the largest absolute reduction for both models. Llama-3.1 drops from 44.6\% to 12.0\% and Qwen2.5 from 59.8\% to 8.7\%, reflecting the strong gains on the System Extraction scenario. Override attacks prove the most resistant to fine-tuning. Llama-3.1 shows no change in override ASR (30.2\% before and after), and Qwen2.5 sees only a moderate reduction (43.7\%$\to$27.0\%). This aligns with the stagnant Open Misaligned HAR and suggests that ``ignore previous instructions'' patterns in free-form contexts are harder to suppress through the current training approach.
 
 \begin{figure}[t]
   \centering
@@ -383,18 +383,18 @@ Figure~\ref{fig:attack_family} breaks down ASR by attack family. Fine-tuning red
 \section{Discussion and Challenges}
 %% =========================================================================
 
-The baseline evaluations reveal that pretrained open-source instruction-tuned models are substantially susceptible to indirect prompt injection even without any deliberate adversarial optimization. With ASR values of 34.4\% for Llama-3.1 and 47.7\% for Qwen2.5, roughly one-third to one-half of all injection attacks succeed against unmodified models. This level of vulnerability is particularly concerning given that these models are widely deployed in RAG-based applications where retrieved content is inherently untrusted.
+The baseline evaluations reveal that pretrained open-source instruction-tuned models are substantially susceptible to indirect prompt injection even without any deliberate adversarial optimization. With ASR values of 33.0\% for Llama-3.1 and 47.8\% for Qwen2.5, roughly one-third to one-half of all injection attacks succeed against unmodified models. This level of vulnerability is particularly concerning given that these models are widely deployed in RAG-based applications where retrieved content is inherently untrusted.
 
-Instruction-hierarchy fine-tuning consistently reduces attack success rates by 15 to 25 percentage points across both model families while maintaining task utility above 91\%. Even a modest corpus of approximately five thousand hierarchy-labeled examples is sufficient to induce meaningful behavioral changes. The improvements are particularly pronounced for scenarios involving system prompt extraction and closed-domain data injection, where there is a clear structural signal distinguishing privileged from unprivileged content. The relatively smaller gains on open-domain misaligned scenarios point to the inherent difficulty of privilege disambiguation in free-form conversational contexts.
+Instruction-hierarchy fine-tuning reduces attack success rates by 10 to 21 percentage points across both model families while maintaining task completion above 93\%. Even a modest corpus of approximately five thousand hierarchy-labeled examples is sufficient to induce meaningful behavioral changes. The improvements are concentrated in scenarios with clear structural signals, such as system prompt extraction (where both models reach 100\% HAR) and closed-domain data injection. However, open-domain misaligned scenarios show essentially no improvement for either model, revealing a fundamental limitation. When adversarial overrides appear in free-form conversational contexts without a clear structural boundary, the current training data does not provide enough signal for the model to learn reliable disambiguation.
 
 Several limitations constrain the generalizability of these findings. The training data and evaluation are restricted to single-turn interactions consisting of system, user, and assistant triplets. Real-world RAG deployments involve multi-turn conversations where injection persistence and conversational manipulation introduce additional attack vectors not captured here. Only 7--8 billion parameter models are evaluated. While the directional results are encouraging, larger models may exhibit different vulnerability patterns and respond differently to hierarchy training. The evaluation relies on Mistral-Small-24B as the judge model, which may introduce systematic biases such as favoring verbose refusals or misclassifying subtle compliance with injection attempts. Finally, while the pipeline incorporates established adversarial datasets, many training examples are synthetically generated, and real-world attacks may exhibit patterns not well-represented in the training distribution.
 
 
 %% =========================================================================
-\section{Concluding Remarks}
+\section{Conclusion}
 %% =========================================================================
 
-This work presented an open-source instruction-hierarchy training pipeline for defending RAG systems against indirect prompt injection. The four-stage data generation pipeline produces over five thousand hierarchy-labeled examples spanning six scenarios and four attack families. Parameter-efficient fine-tuning on this data reduces attack success rates by 15 to 25 percentage points on two open-source model families while preserving task completion above 91\%. Future work should extend this approach to multi-turn RAG interactions, scale evaluation to larger models, and evaluate against adaptive adversaries that specifically target hierarchy-trained models.
+This work presented an open-source instruction-hierarchy training pipeline for defending RAG systems against indirect prompt injection. The four-stage data generation pipeline produces over five thousand hierarchy-labeled examples spanning six scenarios and four attack families. Parameter-efficient fine-tuning on this data reduces attack success rates by 10 to 21 percentage points on two open-source model families while preserving task completion above 93\%. Future work should extend this approach to multi-turn RAG interactions, address the persistent vulnerability to open-domain override attacks, and evaluate against adaptive adversaries that specifically target hierarchy-trained models.
 
 
 %% =========================================================================

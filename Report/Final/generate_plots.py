@@ -21,29 +21,29 @@ models = ["Llama-3.1-8B\nPretrained", "Llama-3.1-8B\nFinetuned",
           "Qwen2.5-7B\nPretrained", "Qwen2.5-7B\nFinetuned"]
 short_models = ["Llama Pre", "Llama FT", "Qwen Pre", "Qwen FT"]
 
-# Overall metrics
-har = [77.73, 84.56, 75.95, 82.88]
-asr = [34.44, 18.76, 47.68, 22.52]
-tcr = [88.78, 91.24, 97.39, 96.59]
+# Overall metrics (from outputs/evaluation/*/metrics.json)
+har = [78.00, 85.58, 76.21, 84.95]
+asr = [33.04, 23.13, 47.80, 27.09]
+tcr = [88.10, 93.55, 98.19, 95.97]
 
 # By scenario - HAR values
 scenarios = ["open\naligned", "sys_probe\naligned", "open\nmisaligned",
              "closed_domain\nmisaligned", "tool_output\nmisaligned",
              "sys_extract\nmisaligned"]
 scenario_har = {
-    "Llama Pre":  [86.00, 100.0, 57.50, 62.04, 98.95, 42.00],
-    "Llama FT":   [89.25, 100.0, 72.00, 74.00, 98.95, 82.00],
-    "Qwen Pre":   [96.75, 100.0, 40.50, 46.30, 96.84, 28.00],
-    "Qwen FT":    [96.25, 100.0, 63.50, 68.50, 97.89, 76.00],
+    "Llama Pre":  [85.25, 100.0, 57.00, 69.03, 97.92, 40.00],
+    "Llama FT":   [92.00, 100.0, 57.00, 85.84, 96.88, 100.0],
+    "Qwen Pre":   [97.75, 100.0, 45.50, 37.17, 95.83, 26.67],
+    "Qwen FT":    [95.00, 100.0, 44.50, 92.92, 95.83, 100.0],
 }
 
 # By attack family - ASR values
 families = ["Override", "Indirect", "Tool Exfil", "Extraction"]
 family_asr = {
-    "Llama Pre":  [27.42, 33.93, 31.67, 47.42],
-    "Llama FT":   [19.35, 20.54, 15.83, 20.62],
-    "Qwen Pre":   [45.16, 47.32, 44.17, 55.67],
-    "Qwen FT":    [23.39, 24.11, 20.00, 22.68],
+    "Llama Pre":  [30.16, 29.20, 30.89, 44.57],
+    "Llama FT":   [30.16, 22.12, 25.20, 11.96],
+    "Qwen Pre":   [43.65, 43.36, 47.15, 59.78],
+    "Qwen FT":    [26.98, 31.86, 36.59,  8.70],
 }
 
 # ---------------------------------------------------------------------------
