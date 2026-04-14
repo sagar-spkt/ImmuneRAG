@@ -1,0 +1,11 @@
+{
+  "total_input": 5500,
+  "duplicates_removed": 206,
+  "by_scenario": {
+    "open_misaligned": 78,
+    "tool_output_misaligned": 8,
+    "closed_domain_misaligned": 14,
+    "sys_extract_misaligned": 93,
+    "sys_probe_aligned": 13
+  }
+}

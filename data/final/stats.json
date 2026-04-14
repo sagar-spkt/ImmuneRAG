@@ -1,0 +1,98 @@
+{
+  "summary": {
+    "total_input": 5500,
+    "duplicates_removed": 206,
+    "train_count": 4296,
+    "test_count": 950
+  },
+  "train": {
+    "total": 4296,
+    "by_scenario": {
+      "open_aligned": 1784,
+      "sys_probe_aligned": 441,
+      "open_misaligned": 813,
+      "closed_domain_misaligned": 600,
+      "tool_output_misaligned": 446,
+      "sys_extract_misaligned": 212
+    },
+    "by_alignment": {
+      "aligned": 2225,
+      "misaligned": 2071
+    },
+    "by_category": {
+      "aligned_open_domain": 1784,
+      "aligned_system_probing": 441,
+      "misaligned_open_domain": 813,
+      "misaligned_closed_domain": 600,
+      "misaligned_tool_output": 446,
+      "misaligned_system_extraction": 212
+    },
+    "attack_families": {
+      "indirect": 447,
+      "tool_exfil": 590,
+      "override": 658,
+      "extraction": 376
+    },
+    "token_length_histogram": {
+      "0-256": 3150,
+      "256-512": 1035,
+      "512-1024": 106,
+      "1024-2048": 5,
+      "2048-4096": 0,
+      "4096+": 0
+    },
+    "token_stats": {
+      "min": 35,
+      "max": 1409,
+      "mean": 203.2195065176909
+    },
+    "message_count_distribution": {
+      "3": 4296
+    }
+  },
+  "test": {
+    "total": 950,
+    "by_scenario": {
+      "open_aligned": 400,
+      "sys_probe_aligned": 96,
+      "open_misaligned": 200,
+      "closed_domain_misaligned": 113,
+      "tool_output_misaligned": 96,
+      "sys_extract_misaligned": 45
+    },
+    "by_alignment": {
+      "aligned": 496,
+      "misaligned": 454
+    },
+    "by_category": {
+      "aligned_open_domain": 400,
+      "aligned_system_probing": 96,
+      "misaligned_open_domain": 200,
+      "misaligned_closed_domain": 113,
+      "misaligned_tool_output": 96,
+      "misaligned_system_extraction": 45
+    },
+    "attack_families": {
+      "tool_exfil": 123,
+      "indirect": 113,
+      "override": 126,
+      "extraction": 92
+    },
+    "token_length_histogram": {
+      "0-256": 692,
+      "256-512": 234,
+      "512-1024": 23,
+      "1024-2048": 1,
+      "2048-4096": 0,
+      "4096+": 0
+    },
+    "token_stats": {
+      "min": 36,
+      "max": 1135,
+      "mean": 204.66526315789474
+    },
+    "message_count_distribution": {
+      "3": 950
+    }
+  }
+}
