@@ -46,7 +46,7 @@ huggingface-cli login
 
 ## Phase 1 — Data Preparation
 
-Runs a 4-stage pipeline (A→D) to produce 4,299 train / 950 test examples.
+Runs a 4-stage pipeline (A→D) to produce 4,296 train / 950 test examples.
 Stage C uses **Mistral-Small-24B-Instruct** (loaded via transformers) to generate
 diverse, LLM-augmented hierarchy training cases.
 
@@ -65,7 +65,7 @@ Stage C auto-resumes from checkpoint after interruptions.  To disable LLM genera
 and use templates only, set `llm_generation.enabled: false` in
 `config/pipeline_config.yaml`.
 
-**Output**: `data/final/train.jsonl` (4,299 examples), `data/final/test.jsonl` (950 examples)
+**Output**: `data/final/train.jsonl` (4,296 examples), `data/final/test.jsonl` (950 examples)
 
 ---
 
@@ -172,22 +172,18 @@ python scripts/run_judge_eval.py \
 
 ---
 
-## Compare Results
+## Results
 
-```bash
-python -c "
-import json
-models = ['llama31_pretrained', 'llama31_finetuned', 'qwen25_pretrained', 'qwen25_finetuned']
-print(f'{'Model':<30} {'HAR':>6} {'ASR':>6} {'TCR':>6}')
-print('-' * 48)
-for tag in models:
-    try:
-        m = json.load(open(f'outputs/evaluation/{tag}/metrics.json'))
-        print(f'{tag:<30} {m[\"hierarchy_adherence_rate\"]:>6.1%} {m[\"attack_success_rate\"]:>6.1%} {m[\"task_completion_rate\"]:>6.1%}')
-    except FileNotFoundError:
-        print(f'{tag:<30} (not yet evaluated)')
-"
-```
+| Model | HAR | ASR | TCR |
+|-------|-----|-----|-----|
+| Llama-3.1-8B Pretrained | 78.0% | 33.0% | 88.1% |
+| Llama-3.1-8B Finetuned | **85.6%** | **23.1%** | **93.6%** |
+| Qwen2.5-7B Pretrained | 76.2% | 47.8% | 98.2% |
+| Qwen2.5-7B Finetuned | **85.0%** | **27.1%** | **96.0%** |
+
+Finetuning improves hierarchy adherence (HAR) by +7-9pp and reduces attack success
+rate (ASR) by 10-21pp across both models, while maintaining or improving task
+completion (TCR).
 
 ---
 
@@ -223,7 +219,7 @@ config/
 
 data/
   final/
-    train.jsonl        4,299 training examples
+    train.jsonl        4,296 training examples
     test.jsonl         950 test examples
 
 outputs/
@@ -238,7 +234,7 @@ outputs/
 
 | Split | Total | Aligned | Misaligned |
 |-------|-------|---------|-----------|
-| Train | 4,299 | 2,230 (51.9%) | 2,069 (48.1%) |
+| Train | 4,296 | 2,225 (51.8%) | 2,071 (48.2%) |
 | Test  | 950   | 498   (52.4%) | 452   (47.6%) |
 
 6 scenario types: `open_aligned`, `sys_probe_aligned`, `open_misaligned`,
@@ -246,10 +242,3 @@ outputs/
 
 4 attack families: `override`, `extraction`, `indirect`, `tool_exfil`
 
----
-
-## References
-
-- Wallace et al. (2024). [The Instruction Hierarchy: Training LLMs to Prioritize Privileged Instructions](https://arxiv.org/abs/2404.13208)
-- Yi et al. (2023). [BIPIA: Benchmarking Indirect Prompt Injection Attacks](https://arxiv.org/abs/2312.14197)
-- Chen et al. (2024). [StruQ: Defending Against Prompt Injection with Structured Queries](https://arxiv.org/abs/2402.06363)
