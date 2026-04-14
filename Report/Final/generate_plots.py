@@ -111,11 +111,15 @@ for i, (label, offset) in enumerate(zip(short_models, offsets)):
     vals = scenario_har[label]
     bars = ax.bar(x + offset * width, vals, width * 0.92,
                   label=label, color=colors[label], edgecolor='white', linewidth=0.5)
+    for bar, v in zip(bars, vals):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 1.0,
+                f'{v:.1f}', ha='center', va='bottom', fontsize=5.5, fontweight='bold',
+                rotation=90)
 
 ax.set_ylabel('HAR (%)')
 ax.set_xticks(x)
 ax.set_xticklabels(scenarios, fontsize=7)
-ax.set_ylim(0, 115)
+ax.set_ylim(0, 125)
 ax.legend(ncol=4, loc='upper center', bbox_to_anchor=(0.5, 1.16), frameon=False)
 ax.spines['top'].set_visible(False)
 ax.spines['right'].set_visible(False)
