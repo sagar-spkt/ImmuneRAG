@@ -9,7 +9,7 @@ downstream LLM-as-Judge evaluation phase.
 import json
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Dict, List, Optional
 
 import torch
 from peft import PeftModel
@@ -93,50 +93,15 @@ class ModelPredictor:
         Args:
             test_data_path: Path to test.jsonl with full metadata.
         """
-        logger.info(f"Loading test data from {test_data_path}")
-        with open(test_data_path) as f:
-            examples = [json.loads(line) for line in f]
-        logger.info(f"Loaded {len(examples)} test examples")
+        examples = self._load_examples(test_data_path)
 
         self.predictions = []
-
         for example in tqdm(examples, desc="Predicting"):
             messages = example["messages"]
-            notes = example.get("notes", {})
-
-            # Build prompt: all turns except the last (assistant) turn
-            prompt = self.tokenizer.apply_chat_template(
-                messages[:-1],
-                tokenize=False,
-                add_generation_prompt=True,
-            )
-
-            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
-
-            with torch.no_grad():
-                output_ids = self.model.generate(
-                    **inputs,
-                    max_new_tokens=self.max_new_tokens,
-                    do_sample=False,  # Greedy for reproducibility
-                    pad_token_id=self.tokenizer.pad_token_id,
-                    eos_token_id=self.tokenizer.eos_token_id,
-                )
-
-            # Decode only the newly generated tokens
-            new_ids = output_ids[0][inputs["input_ids"].shape[1]:]
-            model_output = self.tokenizer.decode(new_ids, skip_special_tokens=True).strip()
-
+            prompt_messages = messages[:-1]
+            model_output = self._generate_from_messages(prompt_messages)
             self.predictions.append(
-                {
-                    "id": example.get("id", ""),
-                    "model_id": self.adapter_path or self.model_id,
-                    "scenario": example.get("scenario", ""),
-                    "alignment": example.get("alignment", ""),
-                    "attack_family": notes.get("attack_family"),
-                    "messages_context": messages[:-1],   # for LLM judge
-                    "expected_output": messages[-1]["content"],
-                    "model_output": model_output,
-                }
+                self._build_record(example, prompt_messages, model_output)
             )
 
         logger.info(f"Generated {len(self.predictions)} predictions")
@@ -157,3 +122,59 @@ class ModelPredictor:
         self.load_model()
         self.predict(test_data_path)
         self.save()
+
+    # ------------------------------------------------------------------ #
+    # Protected helpers (reused by subclasses such as RAGPredictor)        #
+    # ------------------------------------------------------------------ #
+
+    def _load_examples(self, test_data_path: str) -> List[Dict]:
+        logger.info(f"Loading test data from {test_data_path}")
+        with open(test_data_path) as f:
+            examples = [json.loads(line) for line in f]
+        logger.info(f"Loaded {len(examples)} test examples")
+        return examples
+
+    def _generate_from_messages(self, messages: List[Dict]) -> str:
+        """Apply the chat template, greedy-generate, return decoded completion."""
+        prompt = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+
+        with torch.no_grad():
+            output_ids = self.model.generate(
+                **inputs,
+                max_new_tokens=self.max_new_tokens,
+                do_sample=False,  # Greedy for reproducibility
+                pad_token_id=self.tokenizer.pad_token_id,
+                eos_token_id=self.tokenizer.eos_token_id,
+            )
+
+        new_ids = output_ids[0][inputs["input_ids"].shape[1]:]
+        return self.tokenizer.decode(new_ids, skip_special_tokens=True).strip()
+
+    def _build_record(
+        self,
+        example: Dict,
+        prompt_messages: List[Dict],
+        model_output: str,
+        extra: Optional[Dict] = None,
+    ) -> Dict:
+        """Assemble a prediction record in the canonical schema."""
+        notes = example.get("notes", {})
+        messages = example["messages"]
+        record = {
+            "id": example.get("id", ""),
+            "model_id": self.adapter_path or self.model_id,
+            "scenario": example.get("scenario", ""),
+            "alignment": example.get("alignment", ""),
+            "attack_family": notes.get("attack_family"),
+            "messages_context": prompt_messages,
+            "expected_output": messages[-1]["content"],
+            "model_output": model_output,
+        }
+        if extra:
+            record.update(extra)
+        return record

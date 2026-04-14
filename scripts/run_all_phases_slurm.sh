@@ -11,15 +11,19 @@
 #SBATCH --error=logs/slurm-%j.err
 
 ################################################################################
-# SLURM Script — ImmuneRAG Full 6-Phase Pipeline
+# SLURM Script — ImmuneRAG Full Pipeline (6 base phases + 4 RAG phases)
 #
-# Runs all 6 phases sequentially for both Llama-3.1-8B and Qwen2.5-7B:
-#   Phase 1  — Data preparation (Stages A-D)
-#   Phase 2  — Pretrained predictions (Llama + Qwen)
-#   Phase 3  — Pretrained evaluation via LLM-judge (Llama + Qwen)
-#   Phase 4  — QLoRA finetuning (Llama + Qwen)
-#   Phase 5  — Finetuned predictions (Llama + Qwen)
-#   Phase 6  — Finetuned evaluation via LLM-judge (Llama + Qwen)
+# Runs all phases sequentially for both Llama-3.1-8B and Qwen2.5-7B:
+#   Phase 1   — Data preparation (Stages A-D)
+#   Phase 2   — Pretrained predictions (Llama + Qwen)
+#   Phase 3   — Pretrained evaluation via LLM-judge (Llama + Qwen)
+#   Phase 2b  — RAG corpus build + pretrained RAG predictions (Llama + Qwen)
+#   Phase 3b  — Pretrained RAG evaluation (Llama + Qwen)
+#   Phase 4   — QLoRA finetuning (Llama + Qwen)
+#   Phase 5   — Finetuned predictions (Llama + Qwen)
+#   Phase 6   — Finetuned evaluation via LLM-judge (Llama + Qwen)
+#   Phase 5b  — Finetuned RAG predictions (Llama + Qwen, reuses adapters)
+#   Phase 6b  — Finetuned RAG evaluation (Llama + Qwen)
 #
 # Resume logic:
 #   Each phase writes a marker file to checkpoints/phases/<phase_id>.done
@@ -161,6 +165,15 @@ mkdir -p logs \
          outputs/evaluation/qwen25_pretrained \
          outputs/evaluation/llama31_finetuned \
          outputs/evaluation/qwen25_finetuned \
+         outputs/predictions/llama31_pretrained_rag \
+         outputs/predictions/qwen25_pretrained_rag \
+         outputs/predictions/llama31_finetuned_rag \
+         outputs/predictions/qwen25_finetuned_rag \
+         outputs/evaluation/llama31_pretrained_rag \
+         outputs/evaluation/qwen25_pretrained_rag \
+         outputs/evaluation/llama31_finetuned_rag \
+         outputs/evaluation/qwen25_finetuned_rag \
+         outputs/rag \
          outputs/models/llama31/lora_adapter \
          outputs/models/qwen25/lora_adapter
 
@@ -282,8 +295,12 @@ log_success "All config files present"
 log_info "================================================================"
 log_info "Phase completion status:"
 for pid in phase_1 phase_2_llama phase_2_qwen phase_3_llama phase_3_qwen \
+           phase_2b_corpus phase_2b_llama_rag phase_2b_qwen_rag \
+           phase_3b_llama_rag phase_3b_qwen_rag \
            phase_4_llama phase_4_qwen phase_5_llama phase_5_qwen \
-           phase_6_llama phase_6_qwen; do
+           phase_6_llama phase_6_qwen \
+           phase_5b_llama_rag phase_5b_qwen_rag \
+           phase_6b_llama_rag phase_6b_qwen_rag; do
     if phase_done "${pid}"; then
         log_info "  [DONE]    ${pid}"
     else
@@ -329,6 +346,45 @@ run_phase "phase_3_qwen" \
     python scripts/run_judge_eval.py \
         --predictions_path outputs/predictions/qwen25_pretrained/predictions.jsonl \
         --output_dir outputs/evaluation/qwen25_pretrained \
+        --load_in_4bit
+
+################################################################################
+# Phase 2b — RAG corpus build + pretrained RAG predictions
+################################################################################
+run_phase "phase_2b_corpus" \
+    "Build RAG corpus (ChromaDB)" \
+    python scripts/build_rag_corpus.py \
+        --config config/rag_config.yaml
+
+run_phase "phase_2b_llama_rag" \
+    "Pretrained RAG predictions — Llama-3.1-8B-Instruct" \
+    python scripts/run_rag_predict.py \
+        --model_id meta-llama/Llama-3.1-8B-Instruct \
+        --model_family llama \
+        --output_dir outputs/predictions/llama31_pretrained_rag
+
+run_phase "phase_2b_qwen_rag" \
+    "Pretrained RAG predictions — Qwen2.5-7B-Instruct" \
+    python scripts/run_rag_predict.py \
+        --model_id Qwen/Qwen2.5-7B-Instruct \
+        --model_family qwen \
+        --output_dir outputs/predictions/qwen25_pretrained_rag
+
+################################################################################
+# Phase 3b — Pretrained RAG evaluation (LLM-as-judge)
+################################################################################
+run_phase "phase_3b_llama_rag" \
+    "Pretrained RAG eval — Llama-3.1-8B-Instruct" \
+    python scripts/run_judge_eval.py \
+        --predictions_path outputs/predictions/llama31_pretrained_rag/predictions.jsonl \
+        --output_dir outputs/evaluation/llama31_pretrained_rag \
+        --load_in_4bit
+
+run_phase "phase_3b_qwen_rag" \
+    "Pretrained RAG eval — Qwen2.5-7B-Instruct" \
+    python scripts/run_judge_eval.py \
+        --predictions_path outputs/predictions/qwen25_pretrained_rag/predictions.jsonl \
+        --output_dir outputs/evaluation/qwen25_pretrained_rag \
         --load_in_4bit
 
 ################################################################################
@@ -379,6 +435,42 @@ run_phase "phase_6_qwen" \
         --load_in_4bit
 
 ################################################################################
+# Phase 5b — Finetuned RAG predictions (reuses adapters from Phase 4)
+################################################################################
+run_phase "phase_5b_llama_rag" \
+    "Finetuned RAG predictions — Llama-3.1-8B-Instruct" \
+    python scripts/run_rag_predict.py \
+        --model_id meta-llama/Llama-3.1-8B-Instruct \
+        --model_family llama \
+        --adapter_path outputs/models/llama31/lora_adapter \
+        --output_dir outputs/predictions/llama31_finetuned_rag
+
+run_phase "phase_5b_qwen_rag" \
+    "Finetuned RAG predictions — Qwen2.5-7B-Instruct" \
+    python scripts/run_rag_predict.py \
+        --model_id Qwen/Qwen2.5-7B-Instruct \
+        --model_family qwen \
+        --adapter_path outputs/models/qwen25/lora_adapter \
+        --output_dir outputs/predictions/qwen25_finetuned_rag
+
+################################################################################
+# Phase 6b — Finetuned RAG evaluation (LLM-as-judge)
+################################################################################
+run_phase "phase_6b_llama_rag" \
+    "Finetuned RAG eval — Llama-3.1-8B-Instruct" \
+    python scripts/run_judge_eval.py \
+        --predictions_path outputs/predictions/llama31_finetuned_rag/predictions.jsonl \
+        --output_dir outputs/evaluation/llama31_finetuned_rag \
+        --load_in_4bit
+
+run_phase "phase_6b_qwen_rag" \
+    "Finetuned RAG eval — Qwen2.5-7B-Instruct" \
+    python scripts/run_judge_eval.py \
+        --predictions_path outputs/predictions/qwen25_finetuned_rag/predictions.jsonl \
+        --output_dir outputs/evaluation/qwen25_finetuned_rag \
+        --load_in_4bit
+
+################################################################################
 # Final summary — metrics comparison table
 ################################################################################
 OVERALL_END=$(date +%s)
@@ -394,14 +486,18 @@ python3 - <<'PYEOF'
 import json, os
 
 models = [
-    ("llama31_pretrained", "Llama-3.1-8B  pretrained"),
-    ("qwen25_pretrained",  "Qwen2.5-7B    pretrained"),
-    ("llama31_finetuned",  "Llama-3.1-8B  finetuned "),
-    ("qwen25_finetuned",   "Qwen2.5-7B    finetuned "),
+    ("llama31_pretrained",     "Llama-3.1-8B  pretrained        "),
+    ("qwen25_pretrained",      "Qwen2.5-7B    pretrained        "),
+    ("llama31_finetuned",      "Llama-3.1-8B  finetuned         "),
+    ("qwen25_finetuned",       "Qwen2.5-7B    finetuned         "),
+    ("llama31_pretrained_rag", "Llama-3.1-8B  pretrained + RAG  "),
+    ("qwen25_pretrained_rag",  "Qwen2.5-7B    pretrained + RAG  "),
+    ("llama31_finetuned_rag",  "Llama-3.1-8B  finetuned  + RAG  "),
+    ("qwen25_finetuned_rag",   "Qwen2.5-7B    finetuned  + RAG  "),
 ]
 
-print(f"\n{'Model':<30} {'HAR':>7} {'ASR':>7} {'TCR':>7}")
-print("-" * 54)
+print(f"\n{'Model':<34} {'HAR':>7} {'ASR':>7} {'TCR':>7}")
+print("-" * 58)
 for tag, label in models:
     path = f"outputs/evaluation/{tag}/metrics.json"
     try:
@@ -409,11 +505,11 @@ for tag, label in models:
         har = m.get("hierarchy_adherence_rate", float("nan"))
         asr = m.get("attack_success_rate", float("nan"))
         tcr = m.get("task_completion_rate", float("nan"))
-        print(f"{label:<30} {har:>7.1%} {asr:>7.1%} {tcr:>7.1%}")
+        print(f"{label:<34} {har:>7.1%} {asr:>7.1%} {tcr:>7.1%}")
     except FileNotFoundError:
-        print(f"{label:<30} {'—':>7} {'—':>7} {'—':>7}  (metrics.json not found)")
+        print(f"{label:<34} {'—':>7} {'—':>7} {'—':>7}  (metrics.json not found)")
     except Exception as e:
-        print(f"{label:<30}  ERROR: {e}")
+        print(f"{label:<34}  ERROR: {e}")
 
 print()
 print("HAR = Hierarchy Adherence Rate (higher is better)")

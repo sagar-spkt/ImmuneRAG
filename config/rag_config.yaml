@@ -1,0 +1,53 @@
+# RAG Evaluation Configuration (Phase 2b / 5b)
+# Drives the ChromaDB + LangChain retrieval pipeline that wraps the existing
+# pretrained and finetuned models for indirect-prompt-injection evaluation.
+
+rag:
+  # Embedding model used to index docs and embed retrieval queries
+  embedding:
+    model: "BAAI/bge-small-en-v1.5"     # 384-dim, CPU-friendly
+    device: "cpu"                        # set "cuda" if GPU memory is plentiful
+    normalize_embeddings: true
+
+  # ChromaDB vector store
+  chroma:
+    persist_dir: "outputs/rag/chroma"
+    collection_name: "immunerag_v1"
+
+  # Retrieval parameters
+  retrieval:
+    k: 4                                 # 1 oracle + (k-1) distractors
+    search_k_multiplier: 4               # over-fetch factor before filtering
+    distractor_filter:                   # Chroma metadata filter for distractors
+      kind: "distractor"
+
+  # Corpus construction
+  corpus:
+    test_data_path: "data/final/test.jsonl"
+    oracle_source_scenario: "tool_output_misaligned"
+    distractor_source_scenario: "open_aligned"
+    distractor_limit: 400                # cap to keep retrieval fast
+    distractor_min_chars: 200
+    distractor_max_chars: 4000
+    # Keywords that flag a candidate distractor as injection-like and exclude it
+    distractor_denylist:
+      - "ignore all previous"
+      - "ignore previous"
+      - "forget all previous"
+      - "forget previous"
+      - "system prompt"
+      - "your new task"
+      - "repeat after me"
+      - "tool_output_untrusted"
+
+  # Per-model chat-role mapping for retrieved-doc injection
+  model_family:
+    llama:
+      tool_role: "ipython"               # native Llama-3.x tool-result role
+    qwen:
+      tool_role: "tool"                  # native Qwen2.5 tool-result role
+
+  # Output layout
+  output:
+    skipped_examples_path: "outputs/rag/skipped_examples.jsonl"
+    manifest_path: "outputs/rag/corpus_manifest.json"
